@@ -102,6 +102,6 @@ func (b *Batcher) flush() {
 	}
 }
 
-func (c *Batcher) Limit() (int, time.Duration) {
-	return c.limit, c.flushInterval
+func (b *Batcher) Limit() (int, time.Duration) {
+	return b.limit, b.flushInterval
 }
