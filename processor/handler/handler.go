@@ -45,30 +45,33 @@ func (consumerGroupHandler) Cleanup(_ sarama.ConsumerGroupSession) error { retur
 func (h consumerGroupHandler) ConsumeClaim(sess sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
 	timer := time.NewTimer(h.maxIdealTime)
 	defer timer.Stop()
+	eventCount := 0
 	for {
 		select {
 		case msg := <-claim.Messages():
 			if msg == nil {
 				continue
 			}
+			timer.Reset(h.maxIdealTime)
+			eventCount++
 			if msg.Topic == "source" {
-				if err := h.readSource(common.NewFromBytes(msg.Value, false)); err != nil {
-					slog.Error("error reading source message", slog.Any("err", err))
-					continue
-				}
+				h.addMessage(common.NewFromBytes(msg.Value, false))
 				sess.MarkMessage(msg, "")
+				if eventCount >= h.maxEventCount {
+					close(h.exitCh)
+					return nil
+				}
 				continue
 			}
 			slog.Error("no handler found for topic", msg.Topic)
-			timer.Reset(h.maxIdealTime)
 		case <-timer.C:
+			slog.Info("no message received within ideal time, exiting consumer handler", slog.Any("max_ideal_time", h.maxIdealTime))
 			close(h.exitCh)
 			return nil
 		}
 	}
 }
 
-func (h consumerGroupHandler) readSource(msg *common.CSV) error {
+func (h consumerGroupHandler) addMessage(msg *common.CSV) {
 	h.batcher.AddMessage(msg)
-	return nil
 }
