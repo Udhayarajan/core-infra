@@ -123,13 +123,11 @@ func (s *Subscriber) getConnection(ctx context.Context) {
 
 func NewAsyncProducer() (sarama.AsyncProducer, error) {
 	conf := sarama.NewConfig()
-	conf.ClientID = "producer"
-	//conf.Producer.Return.Successes = true
-	//conf.Producer.Return.Errors = true
+	conf.ClientID = "processor"
 	conf.Producer.Flush.Messages = 1000
 	conf.Producer.Flush.Frequency = 500 * time.Millisecond
 	conf.Producer.Compression = sarama.CompressionSnappy
-	conf.Producer.RequiredAcks = sarama.WaitForLocal
+	conf.Producer.RequiredAcks = sarama.NoResponse
 
 	client, err := sarama.NewAsyncProducer([]string{"localhost:9092"}, conf)
 	if err != nil {
