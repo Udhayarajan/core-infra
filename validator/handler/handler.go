@@ -19,19 +19,19 @@ func init() {
 	if err != nil {
 		panic(err)
 	}
-	idFile, err := os.OpenFile("csv/id_sorted.csv", os.O_CREATE|os.O_WRONLY, 0644)
+	idFile, err := os.OpenFile("csv/id_sorted.csv", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 		panic(err)
 	}
 	idSortedCSV = *bufio.NewWriter(idFile)
 
-	nameFile, err := os.OpenFile("csv/name_sorted.csv", os.O_CREATE|os.O_WRONLY, 0644)
+	nameFile, err := os.OpenFile("csv/name_sorted.csv", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 		panic(err)
 	}
 	nameSortedCSV = *bufio.NewWriter(nameFile)
 
-	continentFile, err := os.OpenFile("csv/continent_sorted.csv", os.O_CREATE|os.O_WRONLY, 0644)
+	continentFile, err := os.OpenFile("csv/continent_sorted.csv", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 		panic(err)
 	}
