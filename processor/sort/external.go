@@ -15,8 +15,7 @@ import (
 	"github.com/IBM/sarama"
 )
 
-const mergeProgressLogEvery = 25000
-const mergeProgressLogInterval = time.Minute
+const mergeProgressLogInterval = 45 * time.Second
 
 func (s *Sorter) ExternalSort(producer sarama.AsyncProducer) error {
 	for sortedPath, by := range sortFuncMapper {
@@ -99,10 +98,8 @@ func mergeFiles(files []string, topic string, producer sarama.AsyncProducer, les
 	slog.Info("seeded external merge heap", slog.String("topic", topic), slog.Int("initial_items", h.Len()))
 
 	logProgress := func(force bool) {
-		if !force && emitted > 0 {
-			if emitted%mergeProgressLogEvery != 0 && time.Since(lastProgressLog) < mergeProgressLogInterval {
-				return
-			}
+		if !force && emitted > 0 && time.Since(lastProgressLog) < mergeProgressLogInterval {
+			return
 		}
 
 		slog.Info("external merge progress",

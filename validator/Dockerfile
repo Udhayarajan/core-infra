@@ -13,4 +13,4 @@ RUN CGO_ENABLED=0 go build -o main ./validator/
 
 FROM alpine:3.23
 COPY --from=builder /go/src/app/main ./validator
-CMD ["./validator"]
+ENTRYPOINT ["./validator"]

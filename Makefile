@@ -1,17 +1,11 @@
 build:
 	docker compose build
 
+ifeq ($(OS),Windows_NT)
+    RUN := powershell -ExecutionPolicy Bypass -File scripts/run.ps1
+else
+    RUN := bash scripts/run.sh
+endif
+
 run:
-	docker compose up -d
-
-	@echo "=== GENERATOR ==="
-	docker compose logs generator
-	docker wait generator
-
-	@echo "=== PROCESSOR ==="
-	docker compose logs processor
-	docker wait processor
-
-	@echo "=== VALIDATOR ==="
-	docker compose logs validator
-	docker wait validator
+	$(RUN)

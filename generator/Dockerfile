@@ -13,4 +13,4 @@ RUN CGO_ENABLED=0 go build -o main ./generator/
 
 FROM alpine:3.23
 COPY --from=builder /go/src/app/main ./generator
-CMD ["./generator"]
+ENTRYPOINT ["./generator"]

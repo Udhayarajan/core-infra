@@ -57,6 +57,7 @@ services:
       - core-infra
 
   generator:
+    image: udhayarajan/core-infra-generator:latest
     build:
       context: .
       dockerfile: generator/Dockerfile
@@ -68,11 +69,11 @@ services:
         condition: service_healthy
     environment:
       "KAFKA_BROKER": "broker:29092"
-    command:
-      - "-total=50_000_000" # it's event count
+    command: ["-total=50_000_000"] # it's event count
 
 
   processor:
+    image: udhayarajan/core-infra-processor:latest
     build:
       context: .
       dockerfile: processor/Dockerfile
@@ -84,11 +85,10 @@ services:
         condition: service_healthy
     environment:
       "KAFKA_BROKER": "broker:29092"
-    command:
-      - "-max=50_000_000" # it's event count
-      - "-batch=10_000_000" # it's batch size in bytes (is equal to 10MB)
+    command: ["-max=50_000_000", "-batch=10_000_000"] # it's batch size in bytes (is equal to 10MB)
 
   validator:
+    image: udhayarajan/core-infra-validator:latest
     build:
       context: .
       dockerfile: validator/Dockerfile
