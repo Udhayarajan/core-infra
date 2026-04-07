@@ -20,8 +20,10 @@ func (s *Sorter) ExternalSort(producer sarama.AsyncProducer) error {
 		entries, err := os.ReadDir(sortedFullPath)
 		if err != nil {
 			if os.IsNotExist(err) {
+				slog.Debug("sorter skipped dir does not exist", sortedFullPath)
 				continue
 			}
+			slog.Error("failed to read sorted directory", slog.Any("path", sortedFullPath), slog.Any("err", err))
 			return err
 		}
 
@@ -30,6 +32,7 @@ func (s *Sorter) ExternalSort(producer sarama.AsyncProducer) error {
 		var files []string
 		for _, file := range entries {
 			if file.IsDir() {
+				slog.Debug("skipping dir", slog.Any("path", sortedFullPath))
 				continue
 			}
 

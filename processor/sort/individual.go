@@ -38,6 +38,7 @@ func (s *Sorter) IndividualFileSort() error {
 	dir, err := os.ReadDir(s.rootPath)
 	if err != nil {
 		if os.IsNotExist(err) {
+			slog.Debug("no files to sort, directory does not exist", slog.Any("path", s.rootPath))
 			return nil
 		}
 		return err
@@ -45,6 +46,7 @@ func (s *Sorter) IndividualFileSort() error {
 
 	for _, entry := range dir {
 		if entry.IsDir() {
+			slog.Debug("ignoring directory", slog.Any("path", entry.Name()))
 			continue
 		}
 
@@ -72,21 +74,29 @@ func (s *Sorter) readAndSortFile(fileName string) error {
 	csvData := make([]*common.CSV, 0, s.readSizeLimit)
 	currentLen := int64(0)
 	batchCount := 0
+	batchAndReset := func() error {
+		if err := scanner.Err(); err != nil {
+			return err
+		}
+		batchFileName := fmt.Sprintf("%d_%s", batchCount, fileName)
+		if err := s.batchSorter(batchFileName, csvData); err != nil {
+			return err
+		}
+		csvData = make([]*common.CSV, 0, s.readSizeLimit)
+		currentLen = 0
+		return nil
+	}
 	for scanner.Scan() {
 		line := append([]byte(nil), scanner.Bytes()...)
 		csvData = append(csvData, common.NewFromBytes(line, true))
 		currentLen += int64(len(line))
 		if currentLen >= s.readSizeLimit {
-			if err := scanner.Err(); err != nil {
-				return err
-			}
-			batchFileName := fmt.Sprintf("%d_%s", batchCount, fileName)
-			if err := s.batchSorter(batchFileName, csvData); err != nil {
-				return err
-			}
-			csvData = make([]*common.CSV, 0, s.readSizeLimit)
-			currentLen = 0
+			return batchAndReset()
 		}
+	}
+
+	if currentLen > 0 {
+		return batchAndReset()
 	}
 
 	return nil
@@ -123,7 +133,7 @@ func write(name string, data []*common.CSV) error {
 	}()
 
 	for _, csvData := range data {
-		if _, err := file.Write(append(csvData.Bytes(), '\n')); err != nil {
+		if _, err := file.Write(csvData.Bytes()); err != nil {
 			return err
 		}
 	}

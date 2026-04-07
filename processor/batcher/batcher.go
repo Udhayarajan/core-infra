@@ -50,7 +50,7 @@ func (b *Batcher) Start(ctx context.Context) {
 			shouldFlush := b.currentSize >= b.limit
 			b.mu.Unlock()
 			if shouldFlush {
-				slog.Info("batcher flush limit exceeded")
+				slog.Info("batcher flush limit exceeded", slog.Any("limit", b.limit), slog.Any("currentSize", b.currentSize))
 				b.flushBatch(b.getMessages())
 				ticker.Reset(b.flushInterval)
 			}
@@ -114,5 +114,6 @@ func (b *Batcher) getMessages() []*common.CSV {
 	defer b.mu.Unlock()
 	old := b.messages
 	b.messages = make([]*common.CSV, 0, b.limit)
+	b.currentSize = 0
 	return old
 }

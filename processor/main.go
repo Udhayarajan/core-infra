@@ -68,6 +68,7 @@ func main() {
 		panic(err)
 	}
 
+	slog.Info("individual files sort finished")
 	if err := sorter.ExternalSort(producer); err != nil {
 		panic(err)
 	}
@@ -101,7 +102,7 @@ func (s *Subscriber) Subscribe(ctx context.Context, csvBatcher *batcher.Batcher,
 			<-closeCh
 			cancel()
 		}()
-		slog.Info("starting consumer handler")
+		slog.Info("starting processor handler")
 		if err := s.consumer.Consume(ctx, topics, eventHandler); err != nil {
 			cancel()
 			if errors.Is(err, sarama.ErrNotConnected) {
