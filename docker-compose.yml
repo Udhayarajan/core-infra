@@ -48,3 +48,45 @@ services:
       KAFKA_CONFLUENT_TELEMETRY_METRICS_COLLECTOR_INTERVAL_MS: "60000"
       KAFKA_CONFLUENT_TELEMETRY_REMOTECONFIG_CONFLUENT_ENABLED: "false"
       KAFKA_CONFLUENT_CONSUMER_LAG_EMITTER_ENABLED: "true"
+    networks:
+      - core-infra
+
+  generator:
+    build:
+      context: .
+      dockerfile: generator/Dockerfile
+    container_name: generator
+    networks:
+      - core-infra
+    depends_on:
+      - broker
+    environment:
+      "KAFKA_BROKER": "broker:29092"
+
+  processor:
+    build:
+      context: .
+      dockerfile: processor/Dockerfile
+    container_name: processor
+    networks:
+      - core-infra
+    depends_on:
+      - broker
+    environment:
+      "KAFKA_BROKER": "broker:29092"
+
+  validator:
+    build:
+      context: .
+      dockerfile: validator/Dockerfile
+    container_name: validator
+    networks:
+      - core-infra
+    depends_on:
+      - broker
+    environment:
+      "KAFKA_BROKER": "broker:29092"
+
+networks:
+  core-infra:
+    driver: bridge

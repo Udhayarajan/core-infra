@@ -93,5 +93,10 @@ func newAsyncProducer() (sarama.AsyncProducer, error) {
 	conf.Producer.RequiredAcks = sarama.WaitForLocal
 	conf.ChannelBufferSize = 1024
 
-	return sarama.NewAsyncProducer([]string{"localhost:9092"}, conf)
+	broker := os.Getenv("KAFKA_BROKER")
+	if broker == "" {
+		broker = "localhost:9092"
+	}
+
+	return sarama.NewAsyncProducer([]string{broker}, conf)
 }

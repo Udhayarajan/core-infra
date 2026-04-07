@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
 	"sync/atomic"
 	"time"
 
@@ -79,7 +80,12 @@ func (s *Subscriber) getConnection(ctx context.Context) {
 		return
 	}
 
-	s.brokers = []string{"localhost:9092"}
+	broker := os.Getenv("KAFKA_BROKER")
+	if broker == "" {
+		broker = "localhost:9092"
+	}
+
+	s.brokers = []string{broker}
 	var (
 		consumer sarama.ConsumerGroup
 		err      error

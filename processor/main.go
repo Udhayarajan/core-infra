@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"os"
 	"sync/atomic"
 	"time"
 
@@ -63,7 +64,6 @@ func main() {
 	}
 	cancel()
 
-	ctx, cancel = context.WithCancel(ctx)
 	if err := sorter.IndividualFileSort(); err != nil {
 		panic(err)
 	}
@@ -132,7 +132,12 @@ func (s *Subscriber) getConnection(ctx context.Context) {
 		return
 	}
 
-	s.brokers = []string{"localhost:9092"}
+	broker := os.Getenv("KAFKA_BROKER")
+	if broker == "" {
+		broker = "localhost:9092"
+	}
+
+	s.brokers = []string{broker}
 	var (
 		consumer sarama.ConsumerGroup
 		err      error
@@ -164,7 +169,12 @@ func NewAsyncProducer() (sarama.AsyncProducer, error) {
 	conf.Producer.Compression = sarama.CompressionSnappy
 	conf.Producer.RequiredAcks = sarama.NoResponse
 
-	client, err := sarama.NewAsyncProducer([]string{"localhost:9092"}, conf)
+	broker := os.Getenv("KAFKA_BROKER")
+	if broker == "" {
+		broker = "localhost:9092"
+	}
+
+	client, err := sarama.NewAsyncProducer([]string{broker}, conf)
 	if err != nil {
 		return nil, err
 	}
