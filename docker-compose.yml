@@ -5,6 +5,11 @@ services:
     image: confluentinc/cp-server:8.0.0
     hostname: broker
     container_name: broker
+    healthcheck:
+      test: [ "CMD", "bash", "-c", "cub kafka-ready -b broker:29092 1 20" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
     ports:
       - "9092:9092"
       - "9101:9101"
@@ -59,7 +64,8 @@ services:
     networks:
       - core-infra
     depends_on:
-      - broker
+      broker:
+        condition: service_healthy
     environment:
       "KAFKA_BROKER": "broker:29092"
 
@@ -71,7 +77,8 @@ services:
     networks:
       - core-infra
     depends_on:
-      - broker
+      broker:
+        condition: service_healthy
     environment:
       "KAFKA_BROKER": "broker:29092"
 
@@ -80,10 +87,13 @@ services:
       context: .
       dockerfile: validator/Dockerfile
     container_name: validator
+    volumes:
+      - ./csv:/csv
     networks:
       - core-infra
     depends_on:
-      - broker
+      broker:
+        condition: service_healthy
     environment:
       "KAFKA_BROKER": "broker:29092"
 
