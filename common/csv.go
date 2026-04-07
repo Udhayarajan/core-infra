@@ -117,7 +117,7 @@ func (c *CSV) parseCSV() *parsedCSV {
 }
 
 func (c *CSV) Bytes() []byte {
-	return c.b
+	return append(c.b, '\n')
 }
 
 // find nth comma position
