@@ -67,11 +67,12 @@ func main() {
 	}
 	cancel()
 
+	slog.Info("this will take some time, sorting individual files")
 	if err := sorter.IndividualFileSort(); err != nil {
 		panic(err)
 	}
 
-	slog.Info("individual files sort finished")
+	slog.Info("done individual files, doing exteral sort, this will take some time")
 	if err := sorter.ExternalSort(producer); err != nil {
 		panic(err)
 	}

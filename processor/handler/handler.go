@@ -66,7 +66,7 @@ func (h consumerGroupHandler) ConsumeClaim(sess sarama.ConsumerGroupSession, cla
 				}
 				continue
 			}
-			slog.Error("no handler found for topic", msg.Topic)
+			slog.Error("no handler found for topic", slog.String("topic", msg.Topic))
 		case <-timer.C:
 			slog.Info("no message received within ideal time, exiting consumer handler", slog.Any("max_ideal_time", h.inactivityTimeoutDuration))
 			close(h.exitCh)

@@ -5,13 +5,13 @@ run:
 	docker compose up -d
 
 	@echo "=== GENERATOR ==="
-	docker wait generator > NUL 2>&1 || true
 	docker compose logs generator
+	docker wait generator
 
 	@echo "=== PROCESSOR ==="
-	docker wait processor > NUL 2>&1 || true
 	docker compose logs processor
+	docker wait processor
 
 	@echo "=== VALIDATOR ==="
-	docker wait validator > NUL 2>&1 || true
 	docker compose logs validator
+	docker wait validator

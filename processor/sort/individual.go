@@ -34,7 +34,6 @@ func NewSorter(runID string, readCountLimit int64) *Sorter {
 }
 
 func (s *Sorter) IndividualFileSort() error {
-	slog.Info("starting individual file sort")
 	dir, err := os.ReadDir(s.rootPath)
 	if err != nil {
 		if os.IsNotExist(err) {

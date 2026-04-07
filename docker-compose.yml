@@ -68,6 +68,9 @@ services:
         condition: service_healthy
     environment:
       "KAFKA_BROKER": "broker:29092"
+    command:
+      - "-total=50_000_000" # it's event count
+
 
   processor:
     build:
@@ -81,6 +84,9 @@ services:
         condition: service_healthy
     environment:
       "KAFKA_BROKER": "broker:29092"
+    command:
+      - "-max=50_000_000" # it's event count
+      - "-batch=10_000_000" # it's batch size in bytes (is equal to 10MB)
 
   validator:
     build:

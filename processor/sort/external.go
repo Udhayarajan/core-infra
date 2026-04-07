@@ -8,11 +8,15 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"core-infra/common"
 
 	"github.com/IBM/sarama"
 )
+
+const mergeProgressLogEvery = 25000
+const mergeProgressLogInterval = time.Minute
 
 func (s *Sorter) ExternalSort(producer sarama.AsyncProducer) error {
 	for sortedPath, by := range sortFuncMapper {
@@ -20,19 +24,20 @@ func (s *Sorter) ExternalSort(producer sarama.AsyncProducer) error {
 		entries, err := os.ReadDir(sortedFullPath)
 		if err != nil {
 			if os.IsNotExist(err) {
-				slog.Debug("sorter skipped dir does not exist", sortedFullPath)
+				slog.Debug("sorter skipped dir does not exist", slog.String("path", sortedFullPath))
 				continue
 			}
 			slog.Error("failed to read sorted directory", slog.Any("path", sortedFullPath), slog.Any("err", err))
 			return err
 		}
 
-		slog.Info("doing external sort", slog.Any("path", sortedFullPath))
+		topic := topicFromSortedPath(sortedPath)
+		slog.Info("doing external sort", slog.String("path", sortedFullPath), slog.String("topic", topic))
 
 		var files []string
 		for _, file := range entries {
 			if file.IsDir() {
-				slog.Debug("skipping dir", slog.Any("path", sortedFullPath))
+				slog.Debug("skipping dir", slog.String("path", filepath.Join(sortedFullPath, file.Name())))
 				continue
 			}
 
@@ -40,8 +45,7 @@ func (s *Sorter) ExternalSort(producer sarama.AsyncProducer) error {
 		}
 
 		sort.Strings(files)
-		topic := strings.Split(sortedPath, "_")[1] // sorted_id => id
-		slog.Info("merging files", slog.Any("topic", topic), slog.Any("num_files", len(files)))
+		slog.Info("merging files", slog.String("topic", topic), slog.Int("num_files", len(files)))
 		if err := mergeFiles(files, topic, producer, by); err != nil {
 			return err
 		}
@@ -50,24 +54,63 @@ func (s *Sorter) ExternalSort(producer sarama.AsyncProducer) error {
 	return nil
 }
 
-func mergeFiles(files []string, topic string, producer sarama.AsyncProducer, less func(a *common.CSV, b *common.CSV) bool) error {
-	readers := make([]*bufio.Scanner, len(files))
+type mergeSource struct {
+	name    string
+	file    *os.File
+	scanner *bufio.Scanner
+}
 
-	for i, f := range files {
-		file, _ := os.Open(f)
-		scanner := bufio.NewScanner(file)
-		readers[i] = scanner
+func mergeFiles(files []string, topic string, producer sarama.AsyncProducer, less func(a *common.CSV, b *common.CSV) bool) error {
+	if len(files) == 0 {
+		slog.Debug("no merge files found", slog.String("topic", topic))
+		return nil
 	}
+
+	readers := make([]mergeSource, len(files))
+	for i, f := range files {
+		file, err := os.Open(f)
+		if err != nil {
+			return err
+		}
+
+		readers[i] = mergeSource{name: f, file: file, scanner: bufio.NewScanner(file)}
+	}
+
+	slog.Info("starting external merge", slog.String("topic", topic), slog.Int("num_files", len(files)))
 
 	h := &MinHeap{less: less}
 	heap.Init(h)
+	emitted := 0
+	lastProgressLog := time.Now()
 
 	for i, r := range readers {
-		if r.Scan() {
-			line := append([]byte(nil), r.Bytes()...)
+		if r.scanner.Scan() {
+			line := append([]byte(nil), r.scanner.Bytes()...)
 			csv := common.NewFromBytes(line, false)
 			heap.Push(h, &Item{value: csv, file: i})
+			continue
 		}
+
+		if err := r.scanner.Err(); err != nil {
+			return err
+		}
+	}
+
+	slog.Info("seeded external merge heap", slog.String("topic", topic), slog.Int("initial_items", h.Len()))
+
+	logProgress := func(force bool) {
+		if !force && emitted > 0 {
+			if emitted%mergeProgressLogEvery != 0 && time.Since(lastProgressLog) < mergeProgressLogInterval {
+				return
+			}
+		}
+
+		slog.Info("external merge progress",
+			slog.String("topic", topic),
+			slog.Int("emitted", emitted),
+			slog.Int("queued", h.Len()),
+		)
+		lastProgressLog = time.Now()
 	}
 
 	for h.Len() > 0 {
@@ -77,14 +120,33 @@ func mergeFiles(files []string, topic string, producer sarama.AsyncProducer, les
 			Topic: topic,
 			Value: item.value,
 		}
+		emitted++
+		logProgress(false)
 
 		r := readers[item.file]
-		if r.Scan() {
-			line := append([]byte(nil), r.Bytes()...)
+		if r.scanner.Scan() {
+			line := append([]byte(nil), r.scanner.Bytes()...)
 			csv := common.NewFromBytes(line, false)
 			heap.Push(h, &Item{value: csv, file: item.file})
+			continue
 		}
+
+		if err := r.scanner.Err(); err != nil {
+			return err
+		}
+		slog.Debug("merge source exhausted", slog.String("topic", topic), slog.String("file", r.name), slog.Int("emitted", emitted))
 	}
 
+	logProgress(true)
+	slog.Info("finished external merge", slog.String("topic", topic), slog.Int("emitted", emitted))
+
 	return nil
+}
+
+func topicFromSortedPath(sortedPath string) string {
+	if _, topic, ok := strings.Cut(sortedPath, "_"); ok && topic != "" {
+		return topic
+	}
+
+	return sortedPath
 }

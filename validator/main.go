@@ -24,6 +24,7 @@ func main() {
 	if err := subscriber.Subscribe(context.Background()); err != nil {
 		panic(err)
 	}
+	slog.Info("check sorted files under csv/ directory")
 }
 
 func (s *Subscriber) Subscribe(ctx context.Context) error {
