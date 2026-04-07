@@ -26,15 +26,42 @@ func (s *Subscriber) Subscribe(ctx context.Context) error {
 	topics := []string{"id", "name", "continent"}
 
 	for {
-		eventHandler := handler.NewConsumerGroupHandler()
-		slog.Info("starting consumer handler")
-		if err := s.consumer.Consume(ctx, topics, eventHandler); err != nil {
+		ch := make(chan struct{})
+		eventHandler := handler.NewConsumerGroupHandler(ch)
+		slog.Info("starting validator handler")
+		consumeCtx, cancel := context.WithCancel(ctx)
+		var timeoutTriggered atomic.Bool
+		done := make(chan struct{})
+		go func() {
+			select {
+			case <-ch:
+				timeoutTriggered.Store(true)
+				cancel()
+			case <-done:
+			}
+		}()
+		err := s.consumer.Consume(consumeCtx, topics, eventHandler)
+		close(done)
+		if err != nil {
+			cancel()
+			if timeoutTriggered.Load() {
+				slog.InfoContext(ctx, "validator exited after inactivity timeout")
+				return nil
+			}
 			if errors.Is(err, sarama.ErrNotConnected) {
 				s.getConnection(ctx)
 				continue
 			}
 
 			slog.ErrorContext(ctx, "unable to consume", slog.Any("err", err))
+		}
+		cancel()
+		if timeoutTriggered.Load() {
+			slog.InfoContext(ctx, "validator exited after inactivity timeout")
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
 	}
 }

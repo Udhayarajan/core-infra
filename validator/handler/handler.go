@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"log/slog"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/IBM/sarama"
@@ -38,67 +39,100 @@ func init() {
 }
 
 type consumerGroupHandler struct {
-	timeout   time.Duration
-	timeoutCh chan struct{}
-	timer     *time.Timer
+	timeout     time.Duration
+	timeoutCh   chan struct{}
+	timeoutOnce sync.Once
 }
 
-func NewConsumerGroupHandler() sarama.ConsumerGroupHandler {
+func NewConsumerGroupHandler(ch chan struct{}) sarama.ConsumerGroupHandler {
 	return &consumerGroupHandler{
-		timeout:   5 * time.Minute,
-		timeoutCh: make(chan struct{}),
+		timeout:   20 * time.Second,
+		timeoutCh: ch,
 	}
 }
 
-func (consumerGroupHandler) Setup(_ sarama.ConsumerGroupSession) error   { return nil }
-func (consumerGroupHandler) Cleanup(_ sarama.ConsumerGroupSession) error { return nil }
+func (*consumerGroupHandler) Setup(_ sarama.ConsumerGroupSession) error   { return nil }
+func (*consumerGroupHandler) Cleanup(_ sarama.ConsumerGroupSession) error { return nil }
 
-func (h consumerGroupHandler) ConsumeClaim(sess sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
-	defer close(h.timeoutCh)
-	defer idSortedCSV.Flush()
-	defer nameSortedCSV.Flush()
-	defer continentSortedCSV.Flush()
+func (h *consumerGroupHandler) ConsumeClaim(sess sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
+	defer flush(&idSortedCSV)
+	defer flush(&nameSortedCSV)
+	defer flush(&continentSortedCSV)
+
+	var (
+		timer *time.Timer
+	)
+	defer func() {
+		if timer == nil {
+			return
+		}
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+	}()
 
 	for {
+		var timeout <-chan time.Time
+		if timer != nil {
+			timeout = timer.C
+		}
+
 		select {
-		case msg := <-claim.Messages():
-			h.ensureTimeout()
-			slog.Info("received message", slog.Any("topic", msg.Topic), slog.Any("value", string(msg.Value)))
+		case msg, ok := <-claim.Messages():
+			if !ok {
+				return nil
+			}
 			if msg == nil {
 				continue
 			}
+
+			if timer == nil {
+				timer = time.NewTimer(h.timeout)
+				slog.Info("starting validator inactivity timer", slog.Any("timeout", h.timeout))
+			} else {
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				timer.Reset(h.timeout)
+			}
+
 			switch msg.Topic {
 			case "id":
-				write(idSortedCSV, append(msg.Value, '\n'))
+				write(&idSortedCSV, append(msg.Value, '\n'))
 			case "name":
-				write(nameSortedCSV, append(msg.Value, '\n'))
+				write(&nameSortedCSV, append(msg.Value, '\n'))
 			case "continent":
-				write(continentSortedCSV, append(msg.Value, '\n'))
+				write(&continentSortedCSV, append(msg.Value, '\n'))
 			default:
 				continue
 			}
 
 			sess.MarkMessage(msg, "")
-		case <-h.timeoutCh:
+		case <-timeout:
+			slog.Info("validator inactivity timeout reached, shutting down")
+			h.timeoutOnce.Do(func() {
+				close(h.timeoutCh)
+			})
 			return nil
 		}
 	}
 }
 
-func write(w bufio.Writer, s []byte) {
+func flush(w *bufio.Writer) {
+	if err := w.Flush(); err != nil {
+		slog.Error("failed to flush csv writer", slog.Any("err", err))
+	}
+}
+
+func write(w *bufio.Writer, s []byte) {
 	_, err := w.Write(s)
 	if err != nil {
 		slog.Error("failed to write message to csv", slog.Any("err", err))
 	}
-}
-
-func (h consumerGroupHandler) ensureTimeout() {
-	if h.timer == nil {
-		h.timer = time.NewTimer(h.timeout)
-		go func() {
-			<-h.timer.C
-			close(h.timeoutCh)
-		}()
-	}
-	h.timer.Reset(h.timeout)
 }
