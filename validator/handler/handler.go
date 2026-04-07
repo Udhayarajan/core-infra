@@ -1,47 +1,22 @@
 package handler
 
 import (
-	"bufio"
+	"context"
+	"fmt"
 	"log/slog"
-	"os"
 	"sync"
 	"time"
 
 	"github.com/IBM/sarama"
 )
 
-var (
-	idSortedCSV, nameSortedCSV, continentSortedCSV bufio.Writer
-)
-
-func init() {
-	err := os.MkdirAll("csv", os.ModePerm)
-	if err != nil {
-		panic(err)
-	}
-	idFile, err := os.OpenFile("csv/id_sorted.csv", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
-	if err != nil {
-		panic(err)
-	}
-	idSortedCSV = *bufio.NewWriter(idFile)
-
-	nameFile, err := os.OpenFile("csv/name_sorted.csv", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
-	if err != nil {
-		panic(err)
-	}
-	nameSortedCSV = *bufio.NewWriter(nameFile)
-
-	continentFile, err := os.OpenFile("csv/continent_sorted.csv", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
-	if err != nil {
-		panic(err)
-	}
-	continentSortedCSV = *bufio.NewWriter(continentFile)
-}
-
 type consumerGroupHandler struct {
 	timeout     time.Duration
 	timeoutCh   chan struct{}
 	timeoutOnce sync.Once
+	mu          sync.Mutex
+	lastSeen    *time.Time
+	csv         *csvWriters
 }
 
 func NewConsumerGroupHandler(ch chan struct{}) sarama.ConsumerGroupHandler {
@@ -51,18 +26,26 @@ func NewConsumerGroupHandler(ch chan struct{}) sarama.ConsumerGroupHandler {
 	}
 }
 
-func (*consumerGroupHandler) Setup(_ sarama.ConsumerGroupSession) error   { return nil }
-func (*consumerGroupHandler) Cleanup(_ sarama.ConsumerGroupSession) error { return nil }
+func (h *consumerGroupHandler) Setup(sess sarama.ConsumerGroupSession) error {
+	csv, err := newCSVWriters("csv", []string{"id", "name", "continent"})
+	if err != nil {
+		return fmt.Errorf("init csv writers: %w", err)
+	}
+	h.csv = csv
+
+	go h.watchInactivity(sess.Context())
+	return nil
+}
+
+func (h *consumerGroupHandler) Cleanup(_ sarama.ConsumerGroupSession) error {
+	if h.csv != nil {
+		h.csv.Close()
+		h.csv = nil
+	}
+	return nil
+}
 
 func (h *consumerGroupHandler) ConsumeClaim(sess sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
-	defer flushAll()
-
-	var (
-		timer *time.Timer
-	)
-
-	defer stopAndDrainTimer(timer)
-
 	for {
 		select {
 		case msg, ok := <-claim.Messages():
@@ -73,91 +56,50 @@ func (h *consumerGroupHandler) ConsumeClaim(sess sarama.ConsumerGroupSession, cl
 				continue
 			}
 
-			timer = h.startOrResetTimer(timer)
+			h.mu.Lock()
+			h.lastSeen = new(time.Now())
+			h.mu.Unlock()
 
-			if !writeToTopicCSV(msg) {
+			line := append(msg.Value, '\n')
+
+			if !h.csv.Write(msg.Topic, line) {
 				continue
 			}
 
 			sess.MarkMessage(msg, "")
-		case <-timerChannel(timer):
-			h.handleInactivityTimeout()
+		case <-sess.Context().Done():
 			return nil
 		}
 	}
 }
 
-func flushAll() {
-	flush(&idSortedCSV)
-	flush(&nameSortedCSV)
-	flush(&continentSortedCSV)
-}
+func (h *consumerGroupHandler) watchInactivity(ctx context.Context) {
+	ticker := time.NewTicker(h.timeout / 2)
+	defer ticker.Stop()
 
-func timerChannel(timer *time.Timer) <-chan time.Time {
-	if timer == nil {
-		return nil
-	}
-
-	return timer.C
-}
-
-func (h *consumerGroupHandler) startOrResetTimer(timer *time.Timer) *time.Timer {
-	if timer == nil {
-		slog.Info("starting validator inactivity timer", slog.Any("timeout", h.timeout))
-		return time.NewTimer(h.timeout)
-	}
-
-	stopAndDrainTimer(timer)
-	timer.Reset(h.timeout)
-	return timer
-}
-
-func stopAndDrainTimer(timer *time.Timer) {
-	if timer == nil {
-		return
-	}
-
-	if !timer.Stop() {
+	for {
 		select {
-		case <-timer.C:
-		default:
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			h.mu.Lock()
+			if h.lastSeen == nil {
+				h.mu.Unlock()
+				slog.Info("no messages received yet, waiting for activity")
+				continue
+			}
+			idle := time.Since(*h.lastSeen)
+			h.mu.Unlock()
+
+			slog.Info("watching inactivity", slog.Time("last_seen", *h.lastSeen), slog.Duration("idle_time", idle))
+
+			if idle >= h.timeout {
+				slog.Info("validator inactivity timeout reached, shutting down")
+				h.timeoutOnce.Do(func() {
+					close(h.timeoutCh)
+				})
+				return
+			}
 		}
-	}
-}
-
-func writeToTopicCSV(msg *sarama.ConsumerMessage) bool {
-	line := append(msg.Value, '\n')
-
-	switch msg.Topic {
-	case "id":
-		write(&idSortedCSV, line)
-	case "name":
-		write(&nameSortedCSV, line)
-	case "continent":
-		write(&continentSortedCSV, line)
-	default:
-		return false
-	}
-
-	return true
-}
-
-func (h *consumerGroupHandler) handleInactivityTimeout() {
-	slog.Info("validator inactivity timeout reached, shutting down")
-	h.timeoutOnce.Do(func() {
-		close(h.timeoutCh)
-	})
-}
-
-func flush(w *bufio.Writer) {
-	if err := w.Flush(); err != nil {
-		slog.Error("failed to flush csv writer", slog.Any("err", err))
-	}
-}
-
-func write(w *bufio.Writer, s []byte) {
-	_, err := w.Write(s)
-	if err != nil {
-		slog.Error("failed to write message to csv", slog.Any("err", err))
 	}
 }

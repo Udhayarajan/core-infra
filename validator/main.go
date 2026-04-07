@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"log/slog"
 	"os"
 	"sync/atomic"
@@ -13,7 +14,14 @@ import (
 	"github.com/IBM/sarama"
 )
 
+const fiftyMillion = 50_000_000
+
+var (
+	maxEvents int64
+)
+
 func init() {
+	flag.Int64Var(&maxEvents, "max", 2*fiftyMillion, "maximum number of events the listener should process before exiting")
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		AddSource: true,
 	})))
@@ -99,7 +107,7 @@ func (s *Subscriber) getConnection(ctx context.Context) {
 		conf     = sarama.NewConfig()
 	)
 
-	conf.Consumer.Offsets.Initial = sarama.OffsetOldest
+	conf.Consumer.Offsets.Initial = sarama.OffsetNewest
 	conf.Consumer.Return.Errors = true
 	conf.Version = sarama.V3_9_0_0
 
