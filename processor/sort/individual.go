@@ -2,12 +2,15 @@ package sort
 
 import (
 	"bufio"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
 
 	"core-infra/common"
+
+	"golang.org/x/sync/errgroup"
 )
 
 var sortFuncMapper = map[string]func(a, b *common.CSV) bool{
@@ -16,10 +19,27 @@ var sortFuncMapper = map[string]func(a, b *common.CSV) bool{
 	"sorted_continent": byContinent,
 }
 
-func IndividualFileSort(runID string) error {
-	rootPath := filepath.Join("csv", runID)
-	dir, err := os.ReadDir(rootPath)
+type Sorter struct {
+	runID         string
+	readSizeLimit int64
+	rootPath      string // csv/{runID}
+}
+
+func NewSorter(runID string, readCountLimit int64) *Sorter {
+	return &Sorter{
+		runID:         runID,
+		readSizeLimit: readCountLimit,
+		rootPath:      filepath.Join("csv", runID),
+	}
+}
+
+func (s *Sorter) IndividualFileSort() error {
+	slog.Info("starting individual file sort")
+	dir, err := os.ReadDir(s.rootPath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
 		return err
 	}
 
@@ -28,15 +48,15 @@ func IndividualFileSort(runID string) error {
 			continue
 		}
 
-		if err := readAndSortFile(rootPath, entry.Name()); err != nil {
+		if err := s.readAndSortFile(entry.Name()); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func readAndSortFile(rootPath, fileName string) error {
-	file, err := os.Open(filepath.Join(rootPath, fileName))
+func (s *Sorter) readAndSortFile(fileName string) error {
+	file, err := os.Open(filepath.Join(s.rootPath, fileName))
 	if err != nil {
 		return err
 	}
@@ -49,24 +69,41 @@ func readAndSortFile(rootPath, fileName string) error {
 
 	scanner := bufio.NewScanner(file)
 
-	var csvData []*common.CSV
+	csvData := make([]*common.CSV, 0, s.readSizeLimit)
+	currentLen := int64(0)
+	batchCount := 0
 	for scanner.Scan() {
 		line := append([]byte(nil), scanner.Bytes()...)
 		csvData = append(csvData, common.NewFromBytes(line, true))
-	}
-
-	if err := scanner.Err(); err != nil {
-		return err
-	}
-
-	for parentPath, fn := range sortFuncMapper {
-		sortPath := filepath.Join(rootPath, parentPath, fileName)
-		if err := sortAndSave(sortPath, csvData, fn); err != nil {
-			return err
+		currentLen += int64(len(line))
+		if currentLen >= s.readSizeLimit {
+			if err := scanner.Err(); err != nil {
+				return err
+			}
+			batchFileName := fmt.Sprintf("%d_%s", batchCount, fileName)
+			if err := s.batchSorter(batchFileName, csvData); err != nil {
+				return err
+			}
+			csvData = make([]*common.CSV, 0, s.readSizeLimit)
+			currentLen = 0
 		}
 	}
 
 	return nil
+}
+
+func (s *Sorter) batchSorter(fileName string, csvData []*common.CSV) error {
+
+	g := errgroup.Group{}
+
+	for parentPath, fn := range sortFuncMapper {
+		sortPath := filepath.Join(s.rootPath, parentPath, fileName)
+		g.Go(func() error {
+			return sortAndSave(sortPath, csvData, fn)
+		})
+	}
+
+	return g.Wait()
 }
 
 func write(name string, data []*common.CSV) error {

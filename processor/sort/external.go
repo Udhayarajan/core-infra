@@ -3,6 +3,7 @@ package sort
 import (
 	"bufio"
 	"container/heap"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -13,15 +14,18 @@ import (
 	"github.com/IBM/sarama"
 )
 
-func ExternalSort(runID string, producer sarama.AsyncProducer) error {
-	rootPath := filepath.Join("csv", runID)
-
+func (s *Sorter) ExternalSort(producer sarama.AsyncProducer) error {
 	for sortedPath, by := range sortFuncMapper {
-		sortedFullPath := filepath.Join(rootPath, sortedPath)
+		sortedFullPath := filepath.Join(s.rootPath, sortedPath)
 		entries, err := os.ReadDir(sortedFullPath)
 		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
 			return err
 		}
+
+		slog.Info("doing external sort", slog.Any("path", sortedFullPath))
 
 		var files []string
 		for _, file := range entries {
@@ -33,7 +37,9 @@ func ExternalSort(runID string, producer sarama.AsyncProducer) error {
 		}
 
 		sort.Strings(files)
-		if err := mergeFiles(files, strings.Split(sortedPath, "_")[1], producer, by); err != nil {
+		topic := strings.Split(sortedPath, "_")[1] // sorted_id => id
+		slog.Info("merging files", slog.Any("topic", topic), slog.Any("num_files", len(files)))
+		if err := mergeFiles(files, topic, producer, by); err != nil {
 			return err
 		}
 	}
