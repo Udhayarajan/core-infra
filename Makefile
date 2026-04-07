@@ -5,19 +5,13 @@ run:
 	docker compose up -d
 
 	@echo "=== GENERATOR ==="
-	docker compose logs -f generator & \
-	LOG_PID=$$!; \
-	docker wait generator > /dev/null; \
-	kill $$LOG_PID;
+	docker wait generator > NUL 2>&1 || true
+	docker compose logs generator
 
 	@echo "=== PROCESSOR ==="
-	docker compose logs -f processor & \
-	LOG_PID=$$!; \
-	docker wait processor > /dev/null; \
-	kill $$LOG_PID;
+	docker wait processor > NUL 2>&1 || true
+	docker compose logs processor
 
 	@echo "=== VALIDATOR ==="
-	docker compose logs -f validator & \
-	LOG_PID=$$!; \
-	docker wait validator > /dev/null; \
-	kill $$LOG_PID;
+	docker wait validator > NUL 2>&1 || true
+	docker compose logs validator
