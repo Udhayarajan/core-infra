@@ -9,3 +9,7 @@ endif
 
 run:
 	$(RUN)
+
+
+local_run:
+	@cmd /C "$(CURDIR)\scripts\local.bat"
