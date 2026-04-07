@@ -13,27 +13,21 @@ import (
 
 type consumerGroupHandler struct {
 	batcher                   *batcher.Batcher
-	maxEventCount             int64
 	inactivityTimeoutDuration time.Duration
 	exitCh                    chan struct{}
 }
 
-func NewConsumerGroupHandler(batcher *batcher.Batcher, maxEvent int64, inactivityTimeout time.Duration, ch chan struct{}) (sarama.ConsumerGroupHandler, error) {
-	if inactivityTimeout <= 0 && maxEvent <= 0 {
-		return nil, fmt.Errorf("either inactivityTimeout or maxEvent must be greater than 0")
+func NewConsumerGroupHandler(batcher *batcher.Batcher, inactivityTimeout time.Duration, ch chan struct{}) (sarama.ConsumerGroupHandler, error) {
+	if inactivityTimeout <= 0 {
+		return nil, fmt.Errorf("inactivity timeout must be greater than zero")
 	}
-	batcherLimit, batcherTickerDuration := batcher.Limit()
-	if inactivityTimeout > 0 && batcherTickerDuration.Nanoseconds() > inactivityTimeout.Nanoseconds() {
+	_, batcherTickerDuration := batcher.Limit()
+	if batcherTickerDuration.Nanoseconds() > inactivityTimeout.Nanoseconds() {
 		return nil, fmt.Errorf("ideal wait time is too shorter than batch ticker interval")
-	}
-
-	if maxEvent > 0 && batcherLimit > maxEvent {
-		return nil, fmt.Errorf("max event count is too shorter than batch limit")
 	}
 
 	return &consumerGroupHandler{
 		batcher:                   batcher,
-		maxEventCount:             maxEvent,
 		inactivityTimeoutDuration: inactivityTimeout,
 		exitCh:                    ch,
 	}, nil
@@ -59,11 +53,6 @@ func (h consumerGroupHandler) ConsumeClaim(sess sarama.ConsumerGroupSession, cla
 				h.addMessage(common.NewFromBytes(msg.Value, false))
 				sess.MarkMessage(msg, "")
 				eventCount++
-				if eventCount >= h.maxEventCount {
-					slog.Info("consumer handler processed max event count, exiting", slog.Any("max_event_count", h.maxEventCount))
-					close(h.exitCh)
-					return nil
-				}
 				continue
 			}
 			slog.Error("no handler found for topic", slog.String("topic", msg.Topic))

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"sync/atomic"
 	"time"
 
@@ -43,8 +44,6 @@ func getUniqueRunID() string {
 }
 
 func main() {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	producer, err := NewAsyncProducer()
 	if err != nil {
@@ -54,26 +53,29 @@ func main() {
 	defer producer.Close()
 
 	runID := getUniqueRunID()
-
-	sorter := sort.NewSorter(runID, batchSize)
+	rootPath := filepath.Join("csv", runID)
 
 	subscriber := &Subscriber{}
 
-	csvBatcher := batcher.NewBatcher(batchSize, flushInterval, runID)
-	go csvBatcher.Start(ctx)
+	csvBatcher := batcher.NewBatcher(maxEvents, batchSize, flushInterval, rootPath)
 
-	if err := subscriber.Subscribe(ctx, csvBatcher, maxEvents, inactivityTimeout); err != nil && !errors.Is(err, errListenerExited) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ch := make(chan struct{}, 1)
+	go func() {
+		<-ch
+		cancel()
+	}()
+	go csvBatcher.Start(ctx, ch)
+
+	if err := subscriber.Subscribe(ctx, csvBatcher, inactivityTimeout); err != nil && !errors.Is(err, errListenerExited) {
 		panic(err)
 	}
 	cancel()
 
-	slog.Info("this will take some time, sorting individual files")
-	if err := sorter.IndividualFileSort(); err != nil {
-		panic(err)
-	}
-
-	slog.Info("done individual files, doing exteral sort, this will take some time")
-	if err := sorter.ExternalSort(producer); err != nil {
+	slog.Info("done individual files, doing external sort, this will take some time")
+	if err := sort.ExternalSort(rootPath, producer); err != nil {
 		panic(err)
 	}
 }
@@ -89,7 +91,7 @@ func main() {
 //
 // It returns errListenerExited when consumption ends due to context cancellation.
 // Other errors are returned as-is.
-func (s *Subscriber) Subscribe(ctx context.Context, csvBatcher *batcher.Batcher, maxEventCount int64, inactivityTimeout time.Duration) error {
+func (s *Subscriber) Subscribe(ctx context.Context, csvBatcher *batcher.Batcher, inactivityTimeout time.Duration) error {
 	s.getConnection(ctx)
 
 	// Get the list of topics to subscribe
@@ -97,7 +99,7 @@ func (s *Subscriber) Subscribe(ctx context.Context, csvBatcher *batcher.Batcher,
 
 	for {
 		closeCh := make(chan struct{})
-		eventHandler, err := handler.NewConsumerGroupHandler(csvBatcher, maxEventCount, inactivityTimeout, closeCh)
+		eventHandler, err := handler.NewConsumerGroupHandler(csvBatcher, inactivityTimeout, closeCh)
 		if err != nil {
 			return err
 		}

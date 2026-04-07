@@ -13,13 +13,15 @@ import (
 	"core-infra/common"
 
 	"github.com/IBM/sarama"
+	"golang.org/x/sync/errgroup"
 )
 
 const mergeProgressLogInterval = 45 * time.Second
 
-func (s *Sorter) ExternalSort(producer sarama.AsyncProducer) error {
-	for sortedPath, by := range sortFuncMapper {
-		sortedFullPath := filepath.Join(s.rootPath, sortedPath)
+func ExternalSort(rootPath string, producer sarama.AsyncProducer) error {
+	eg := errgroup.Group{}
+	for sortedPath, by := range FuncMapper {
+		sortedFullPath := filepath.Join(rootPath, sortedPath)
 		entries, err := os.ReadDir(sortedFullPath)
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -43,14 +45,16 @@ func (s *Sorter) ExternalSort(producer sarama.AsyncProducer) error {
 			files = append(files, filepath.Join(sortedFullPath, file.Name()))
 		}
 
-		sort.Strings(files)
-		slog.Info("merging files", slog.String("topic", topic), slog.Int("num_files", len(files)))
-		if err := mergeFiles(files, topic, producer, by); err != nil {
-			return err
-		}
+		eg.Go(func(files []string, topic string, less func(a *common.CSV, b *common.CSV) bool) func() error {
+			return func() error {
+				sort.Strings(files)
+				slog.Info("merging files", slog.String("topic", topic), slog.Int("num_files", len(files)))
+				return mergeFiles(files, topic, producer, less)
+			}
+		}(files, topic, by))
 	}
 
-	return nil
+	return eg.Wait()
 }
 
 type mergeSource struct {

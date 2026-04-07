@@ -1,43 +1,52 @@
 package batcher
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
 	"core-infra/common"
+	srt "core-infra/processor/sort"
+
+	"golang.org/x/sync/errgroup"
 )
 
 type Batcher struct {
 	messages      []*common.CSV
+	batches       chan []*common.CSV
 	flushInterval time.Duration
 	limit         int64
 	currentSize   int64
 	check         chan bool
-	batchCount    int
 	rootPath      string
 	mu            sync.Mutex
+	maxEventCount int64
+	currentCount  int64
 }
 
-func NewBatcher(batchLimit int64, flushInterval time.Duration, runID string) *Batcher {
+func NewBatcher(maxEventCount, batchLimit int64, flushInterval time.Duration, rootPath string) *Batcher {
 	return &Batcher{
 		messages:      make([]*common.CSV, 0, batchLimit),
 		flushInterval: flushInterval,
 		check:         make(chan bool),
 		limit:         batchLimit,
-		rootPath:      fmt.Sprintf("csv/%s", runID),
+		rootPath:      rootPath,
+		batches:       make(chan []*common.CSV, 30), // buffer to hold batches before they are flushed
+		maxEventCount: maxEventCount,
 	}
 }
 
-func (b *Batcher) Start(ctx context.Context) {
+func (b *Batcher) Start(ctx context.Context, closeCh chan struct{}) {
 	if err := os.MkdirAll(b.rootPath, 0o755); err != nil {
 		slog.Error("mkdir failed", slog.Any("err", err))
 		return
 	}
+	go b.flushBatches(ctx)
 	ticker := time.NewTicker(b.flushInterval)
 	defer ticker.Stop()
 	for {
@@ -56,7 +65,13 @@ func (b *Batcher) Start(ctx context.Context) {
 			}
 		case <-ticker.C:
 			slog.Info("batcher flush interval")
-			b.flushBatch(b.getMessages())
+			msg := b.getMessages()
+			b.flushBatch(msg)
+			if b.currentCount >= b.maxEventCount {
+				slog.Info("expected amount of events received", slog.Any("current_count", b.currentCount))
+				close(closeCh)
+				return
+			}
 			ticker.Reset(b.flushInterval)
 		}
 	}
@@ -77,32 +92,34 @@ func (b *Batcher) flushBatch(messages []*common.CSV) {
 	if len(messages) == 0 {
 		return
 	}
+	b.batches <- messages
+}
 
-	b.batchCount++
-	path := fmt.Sprintf("%s/batch_%d.csv", b.rootPath, b.batchCount)
+func (b *Batcher) flushBatches(ctx context.Context) {
+	batchCount := 0
+	for {
+		select {
+		case batch, ok := <-b.batches:
+			if !ok && ctx.Err() != nil {
+				return
+			}
+			batchCount++
+			g := errgroup.Group{}
+			for sortPath, fn := range srt.FuncMapper {
+				path := filepath.Join(b.rootPath, sortPath, fmt.Sprintf("batch_%d.csv", batchCount))
+				g.Go(func(path string, fn func(a, b *common.CSV) bool) func() error {
+					return func() error {
+						return sortAndSave(path, batch, fn)
+					}
+				}(path, fn))
+			}
+			if err := g.Wait(); err != nil {
+				slog.Error("flush batch fails", slog.Any("err", err))
+			}
 
-	f, err := os.Create(path)
-	if err != nil {
-		slog.Error("open batch file failed", slog.Any("err", err), slog.String("path", path))
-		return
-	}
-	defer f.Close()
-
-	w := bufio.NewWriter(f)
-
-	written := 0
-	for _, msg := range messages {
-		_, err := w.Write(msg.Bytes())
-		if err != nil {
-			slog.Error("write batch failed", slog.Any("err", err))
+			slog.Info("flushed batch", slog.Int("messages", len(batch)))
 		}
-		written++
 	}
-
-	if err := w.Flush(); err != nil {
-		slog.Error("flush batch file failed", slog.Any("err", err))
-	}
-	slog.Info("flushed batch", slog.String("path", path), slog.Int("messages", written))
 }
 
 func (b *Batcher) Limit() (int64, time.Duration) {
@@ -115,5 +132,45 @@ func (b *Batcher) getMessages() []*common.CSV {
 	old := b.messages
 	b.messages = make([]*common.CSV, 0, b.limit)
 	b.currentSize = 0
+	b.currentCount += int64(len(old))
 	return old
+}
+
+func sortAndSave(name string, csvData []*common.CSV, by func(a *common.CSV, b *common.CSV) bool) error {
+	copyData := make([]*common.CSV, len(csvData))
+	copy(copyData, csvData)
+	sort.Slice(copyData, func(i, j int) bool {
+		return by(copyData[i], copyData[j])
+	})
+
+	if err := write(name, copyData); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func write(name string, data []*common.CSV) error {
+	if err := os.MkdirAll(filepath.Dir(name), 0755); err != nil && !os.IsExist(err) {
+		return err
+	}
+
+	file, err := os.Create(name)
+	if err != nil {
+		return err
+	}
+
+	defer func() {
+		if err := file.Close(); err != nil {
+			slog.Error("failed to close file", slog.Any("err", err), slog.String("file", name))
+		}
+	}()
+
+	for _, csvData := range data {
+		if _, err := file.Write(csvData.Bytes()); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
