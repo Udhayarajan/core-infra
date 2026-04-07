@@ -50,6 +50,7 @@ func (c *CSV) Continent() string {
 
 func (c *CSV) ensureParsed(field int) {
 	res := c.parsed
+	needFullParse := field < 0 || field > 3
 	missing := false
 	if res == nil {
 		missing = true
@@ -60,13 +61,13 @@ func (c *CSV) ensureParsed(field int) {
 		case 1:
 			missing = res.Name == ""
 		case 2:
-			missing = res.Continent == ""
+			missing = res.Address == ""
 		default:
-			missing = res.Address != ""
+			missing = res.Continent == ""
 		}
 	}
 	if missing {
-		if field < 0 || field > 3 {
+		if needFullParse {
 			c.parsed = c.parseCSV()
 			return
 		}

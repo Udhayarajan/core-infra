@@ -1,92 +1,34 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log/slog"
 	"math/rand"
-	"strconv"
-	"strings"
+	"os"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"core-infra/common"
+	"core-infra/generator/data"
 
 	"github.com/IBM/sarama"
 )
 
-type Continent string
+var totalMessages int64
 
-var (
-	Asia         Continent = "Asia"
-	Africa       Continent = "Africa"
-	Australia    Continent = "Australia"
-	Europe       Continent = "Europe"
-	NorthAmerica Continent = "North America"
-	SouthAmerica Continent = "South America"
-)
+func init() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		AddSource: true,
+	})))
 
-var availableContinents = []Continent{
-	Asia,
-	Africa,
-	Australia,
-	Europe,
-	NorthAmerica,
-	SouthAmerica,
-}
-
-const (
-	minNameLength              = 10
-	maxNameLength              = 15
-	minAddressLength           = 15
-	maxAddressLength           = 20
-	alphabetCharset            = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-	alphabetNumberSpaceCharset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 "
-)
-
-var rng = rand.New(rand.NewSource(time.Now().UnixNano()))
-
-func generateCSV() *common.CSV {
-	nameLength := randomLength(minNameLength, maxNameLength)
-	addressLength := randomLength(minAddressLength, maxAddressLength)
-
-	b := make([]byte, 0, 64)
-
-	b = strconv.AppendInt(b, int64(rng.Int31()), 10)
-	b = append(b, ',')
-
-	name := randomString(nameLength, alphabetCharset)
-	b = append(b, name...)
-	b = append(b, ',')
-
-	address := randomString(addressLength, alphabetNumberSpaceCharset)
-	b = append(b, address...)
-	b = append(b, ',')
-
-	cont := availableContinents[rng.Intn(len(availableContinents))]
-	b = append(b, cont...)
-
-	return common.NewFromBytes(b, false)
-}
-
-func randomLength(min, max int) int {
-	return rng.Intn(max-min+1) + min
-}
-
-func randomString(length int, charset string) string {
-	var b strings.Builder
-	b.Grow(length)
-
-	for i := 0; i < length; i++ {
-		b.WriteByte(charset[rng.Intn(len(charset))])
-	}
-
-	return b.String()
+	flag.Int64Var(&totalMessages, "total", 50_000_000, "total number of messages to produce")
+	flag.Parse()
 }
 
 func main() {
-	total := 1_000_000
-	producer, err := NewAsyncProducer()
+	producer, err := newAsyncProducer()
 	if err != nil {
 		panic(err)
 	}
@@ -97,57 +39,59 @@ func main() {
 		}
 	}()
 
+	numWorkers := runtime.NumCPU()
+	dataPerWorker := totalMessages / int64(numWorkers)
+
 	var wg sync.WaitGroup
-	wg.Add(total)
-	totalErrors := atomic.Int32{}
-	slog.Info("Starting producer", slog.Any("total_messages", total))
+	totalErrors := atomic.Int64{}
+	slog.Info("Starting producer", slog.Any("total_messages", totalMessages))
 	go func() {
 		for err := range producer.Errors() {
 			fmt.Println("error:", err)
 			totalErrors.Add(1)
-			wg.Done()
 		}
 	}()
 
-	go func() {
-		for range producer.Successes() {
-			wg.Done()
-		}
-	}()
 	start := time.Now()
-	for i := 0; i < total; i++ {
-		payload := generateCSV()
-		producer.Input() <- &sarama.ProducerMessage{
-			Topic: "source",
-			Value: payload,
-		}
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+			gen := data.NewGenerator(rng)
+
+			for j := int64(0); j < dataPerWorker; j++ {
+				payload := gen.Generate()
+				producer.Input() <- &sarama.ProducerMessage{
+					Topic: "source",
+					Value: payload,
+				}
+			}
+		}()
 	}
 
 	wg.Wait()
 
-	success := total - int(totalErrors.Load())
-	fmt.Println("PRODUCER STAT")
-	fmt.Println("Total:", total)
-	fmt.Println("Producer Errors:", totalErrors.Load())
-	fmt.Println("Successes:", success)
-	fmt.Println("Duration:", time.Since(start))
-	fmt.Println("Throughput:", float64(success)/time.Since(start).Seconds(), "msg/sec")
+	success := totalMessages - totalErrors.Load()
+	slog.Info("pipeline complete",
+		slog.Any("total", totalMessages),
+		slog.Any("errors", totalErrors.Load()),
+		slog.Any("success", success),
+		slog.Any("duration", time.Since(start).String()),
+		slog.Any("throughput_msg_per_sec", float64(totalMessages)/time.Since(start).Seconds()),
+	)
 }
 
-func NewAsyncProducer() (sarama.AsyncProducer, error) {
+func newAsyncProducer() (sarama.AsyncProducer, error) {
 	conf := sarama.NewConfig()
 	conf.ClientID = "producer"
-	conf.Producer.Return.Successes = true
 	conf.Producer.Return.Errors = true
-	conf.Producer.Flush.Messages = 1000
-	conf.Producer.Flush.Frequency = 500 * time.Millisecond
+	conf.Producer.Flush.Messages = 5000
+	conf.Producer.Flush.Bytes = 1 << 20
+	conf.Producer.Flush.Frequency = 100 * time.Millisecond
 	conf.Producer.Compression = sarama.CompressionSnappy
 	conf.Producer.RequiredAcks = sarama.WaitForLocal
+	conf.ChannelBufferSize = 1024
 
-	client, err := sarama.NewAsyncProducer([]string{"localhost:9092"}, conf)
-	if err != nil {
-		return nil, err
-	}
-
-	return client, nil
+	return sarama.NewAsyncProducer([]string{"localhost:9092"}, conf)
 }
