@@ -1,7 +1,7 @@
 build:
 	docker compose build
 
-run-seq:
+run:
 	docker compose up -d
 
 	@echo "=== GENERATOR ==="

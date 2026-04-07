@@ -13,6 +13,12 @@ import (
 	"github.com/IBM/sarama"
 )
 
+func init() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		AddSource: true,
+	})))
+}
+
 func main() {
 	subscriber := &Subscriber{}
 	if err := subscriber.Subscribe(context.Background()); err != nil {

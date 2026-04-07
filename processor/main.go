@@ -28,6 +28,9 @@ var (
 )
 
 func init() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		AddSource: true,
+	})))
 	flag.Int64Var(&batchSize, "batch", 10_000_000, "size of messages to batch before writing to disk")
 	flag.Int64Var(&maxEvents, "max", 2*fiftyMillion, "maximum number of events the listener should process before exiting")
 	flag.DurationVar(&inactivityTimeout, "timeout", 2*time.Minute, "duration of inactivity after which the listener should exit")
