@@ -33,25 +33,41 @@ func main() {
 	defer producer.Close()
 
 	runID := getUniqueRunID()
+
+	sorter := sort.NewSorter(runID, batchSize)
+
 	subscriber := &Subscriber{}
-	csvBatcher := batcher.NewBatcher(1000, 20*time.Second, runID)
+
+	csvBatcher := batcher.NewBatcher(batchSize, flushInterval, runID)
 	go csvBatcher.Start(ctx)
-	if err := subscriber.Subscribe(ctx, csvBatcher, -1, 30*time.Second); err != nil && !errors.Is(err, errListenerExited) {
+
+	if err := subscriber.Subscribe(ctx, csvBatcher, maxEvents, inactivityTimeout); err != nil && !errors.Is(err, errListenerExited) {
 		panic(err)
 	}
 	cancel()
 
 	ctx, cancel = context.WithCancel(ctx)
-	if err := sort.IndividualFileSort(runID); err != nil {
+	if err := sorter.IndividualFileSort(); err != nil {
 		panic(err)
 	}
 
-	if err := sort.ExternalSort(runID, producer); err != nil {
+	if err := sorter.ExternalSort(producer); err != nil {
 		panic(err)
 	}
 }
 
-func (s *Subscriber) Subscribe(ctx context.Context, csvBatcher *batcher.Batcher, maxEventCount int32, maxIdealTime time.Duration) error {
+// Subscribe consumes messages from the "source" topic and sends them to csvBatcher.
+// It reconnects when the consumer is disconnected and stops when ctx is canceled.
+//
+// maxEventCount is the maximum number of events the handler should process before
+// signaling completion.
+//
+// maxIdealTime is the target processing window for a batch; the handler may stop
+// earlier or later depending on runtime conditions.
+//
+// It returns errListenerExited when consumption ends due to context cancellation.
+// Other errors are returned as-is.
+func (s *Subscriber) Subscribe(ctx context.Context, csvBatcher *batcher.Batcher, maxEventCount int64, inactivityTimeout time.Duration) error {
 	s.getConnection(ctx)
 
 	// Get the list of topics to subscribe
@@ -59,7 +75,7 @@ func (s *Subscriber) Subscribe(ctx context.Context, csvBatcher *batcher.Batcher,
 
 	for {
 		closeCh := make(chan struct{})
-		eventHandler, err := handler.NewConsumerGroupHandler(csvBatcher, int(maxEventCount), maxIdealTime, closeCh)
+		eventHandler, err := handler.NewConsumerGroupHandler(csvBatcher, maxEventCount, inactivityTimeout, closeCh)
 		if err != nil {
 			return err
 		}
@@ -78,9 +94,10 @@ func (s *Subscriber) Subscribe(ctx context.Context, csvBatcher *batcher.Batcher,
 
 			slog.ErrorContext(ctx, "unable to consume", slog.Any("err", err))
 		}
-		if errors.Is(ctx.Err(), context.Canceled) {
+		if errors.Is(ctx.Err(), context.Canceled) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return errListenerExited
 		}
+		slog.Debug("consumer handler exited", slog.Any("ctxErr", ctx.Err()))
 	}
 }
 
@@ -109,7 +126,7 @@ func (s *Subscriber) getConnection(ctx context.Context) {
 	conf.Version = sarama.V3_9_0_0
 
 	for consumer == nil {
-		consumer, err = sarama.NewConsumerGroup(s.brokers, "consumer", conf)
+		consumer, err = sarama.NewConsumerGroup(s.brokers, "processor", conf)
 		if err != nil {
 			time.Sleep(5 * time.Second) // Wait before retrying
 			continue
