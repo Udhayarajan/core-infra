@@ -17,6 +17,8 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+const avgRecordSize = 50
+
 type Batcher struct {
 	messages      []*common.CSV
 	batches       chan []*common.CSV
@@ -31,8 +33,10 @@ type Batcher struct {
 }
 
 func NewBatcher(maxEventCount, batchLimit int64, flushInterval time.Duration, rootPath string) *Batcher {
+	estimatedCapacity := batchLimit / avgRecordSize
+
 	return &Batcher{
-		messages:      make([]*common.CSV, 0, batchLimit),
+		messages:      make([]*common.CSV, 0, estimatedCapacity),
 		flushInterval: flushInterval,
 		check:         make(chan bool),
 		limit:         batchLimit,
@@ -135,9 +139,11 @@ func (b *Batcher) getMessages() []*common.CSV {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	old := b.messages
-	b.messages = make([]*common.CSV, 0, b.limit)
+	messageCount := len(b.messages)
+	b.messages = make([]*common.CSV, 0, messageCount)
+	slog.Debug("getting messages from batcher", slog.Int("message_count", messageCount), slog.Any("current_size", b.currentSize))
 	b.currentSize = 0
-	b.currentCount += int64(len(old))
+	b.currentCount += int64(messageCount)
 	return old
 }
 
