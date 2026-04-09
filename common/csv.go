@@ -1,107 +1,48 @@
 package common
 
 type parsedCSV struct {
-	ID        int32
-	Name      string
-	Address   string
-	Continent string
+	ID        int32  // 0
+	Name      string // 1
+	Address   string // 2
+	Continent string // 3
 }
 
 type CSV struct {
-	b      []byte
-	parsed *parsedCSV
+	raw       []byte
+	parsedCSV *parsedCSV
+	parsed    uint8 // bit 0=ID, bit 1=Name, bit 2=Address, bit 3=Continent
+
 }
 
 func NewFromBytes(data []byte, parse bool) *CSV {
-	csv := &CSV{b: data}
+	csv := &CSV{raw: data}
 	if parse {
-		csv.ensureParsed(-1)
+		csv.ParseAll()
 	}
 	return csv
 }
 
-func (c *CSV) Encode() ([]byte, error) {
-	return c.b, nil
-}
-
-func (c *CSV) Length() int {
-	return len(c.b)
-}
-
-func (c *CSV) ID() int32 {
-	c.ensureParsed(0)
-	return c.parsed.ID
-}
-
-func (c *CSV) Name() string {
-	c.ensureParsed(1)
-	return c.parsed.Name
-}
-
-func (c *CSV) Address() string {
-	c.ensureParsed(2)
-	return c.parsed.Address
-}
-
-func (c *CSV) Continent() string {
-	c.ensureParsed(3)
-	return c.parsed.Continent
-}
-
-func (c *CSV) ensureParsed(field int) {
-	res := c.parsed
-	needFullParse := field < 0 || field > 3
-	missing := false
-	if res == nil {
-		missing = true
-	} else {
-		switch field {
-		case 0:
-			missing = res.ID == 0
-		case 1:
-			missing = res.Name == ""
-		case 2:
-			missing = res.Address == ""
-		default:
-			missing = res.Continent == ""
-		}
+func (c *CSV) ParseAll() {
+	if c.parsed == 0b00001111 {
+		return
 	}
-	if missing {
-		if needFullParse {
-			c.parsed = c.parseCSV()
-			return
-		}
-		if res == nil {
-			res = &parsedCSV{}
-		}
-		start, end := c.fieldBounds(field)
-		if field == 0 {
-			for j := start; j < end; j++ {
-				res.ID = res.ID*10 + int32(c.b[j]-'0')
-			}
-		}
 
-		c.parsed = res
-	}
-}
-
-func (c *CSV) parseCSV() *parsedCSV {
-	var res parsedCSV
+	res := &parsedCSV{}
 
 	field := 0
 	start := 0
 
-	for i, ch := range c.b {
+	for i, ch := range c.raw {
 		if ch == ',' {
 			switch field {
 			case 0:
 				for j := start; j < i; j++ {
-					res.ID = res.ID*10 + int32(c.b[j]-'0')
+					res.ID = res.ID*10 + int32(c.raw[j]-'0')
 				}
 			case 1:
-				res.Name = string(c.b[start:i])
+				res.Name = string(c.raw[start:i])
 			case 2:
-				res.Address = string(c.b[start:i])
+				res.Address = string(c.raw[start:i])
 			}
 			field++
 			start = i + 1
@@ -110,37 +51,29 @@ func (c *CSV) parseCSV() *parsedCSV {
 
 	// last field (continent)
 	if field == 3 {
-		res.Continent = string(c.b[start:])
+		res.Continent = string(c.raw[start:])
 	}
 
-	return &res
+	c.parsedCSV = res
+	c.parsed = 0b00001111
+}
+
+func (c *CSV) Encode() ([]byte, error) {
+	return c.raw, nil
+}
+
+func (c *CSV) Length() int {
+	return len(c.raw)
 }
 
 func (c *CSV) Bytes() []byte {
-	return append(c.b, '\n')
+	return append(c.raw, '\n')
 }
 
-// find nth comma position
-func (c *CSV) fieldBounds(field int) (start, end int) {
-	start = 0
-	commaCount := 0
+// accessors just read the field directly — no ParseAll call
+// caller is responsible for calling ParseAll before accessing fields
 
-	for i, ch := range c.b {
-		if ch == ',' {
-			if commaCount == field {
-				end = i
-				return
-			}
-			commaCount++
-			start = i + 1
-		}
-	}
-
-	// last field
-	if commaCount == field {
-		end = len(c.b)
-		return
-	}
-
-	return -1, -1
-}
+func (c *CSV) ID() int32         { return c.parsedCSV.ID }
+func (c *CSV) Name() string      { return c.parsedCSV.Name }
+func (c *CSV) Address() string   { return c.parsedCSV.Address }
+func (c *CSV) Continent() string { return c.parsedCSV.Continent }

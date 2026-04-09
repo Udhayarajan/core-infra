@@ -89,7 +89,7 @@ func mergeFiles(files []string, topic string, producer sarama.AsyncProducer, les
 	for i, r := range readers {
 		if r.scanner.Scan() {
 			line := append([]byte(nil), r.scanner.Bytes()...)
-			csv := common.NewFromBytes(line, false)
+			csv := common.NewFromBytes(line, true)
 			heap.Push(h, &Item{value: csv, file: i})
 			continue
 		}
@@ -127,7 +127,7 @@ func mergeFiles(files []string, topic string, producer sarama.AsyncProducer, les
 		r := readers[item.file]
 		if r.scanner.Scan() {
 			line := append([]byte(nil), r.scanner.Bytes()...)
-			csv := common.NewFromBytes(line, false)
+			csv := common.NewFromBytes(line, true)
 			heap.Push(h, &Item{value: csv, file: item.file})
 			continue
 		}

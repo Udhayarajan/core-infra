@@ -1,6 +1,7 @@
 package batcher
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"log/slog"
@@ -105,6 +106,10 @@ func (b *Batcher) flushBatches(ctx context.Context) {
 			}
 			batchCount++
 			g := errgroup.Group{}
+			for _, msg := range batch {
+				msg.ParseAll()
+			}
+
 			for sortPath, fn := range srt.FuncMapper {
 				path := filepath.Join(b.rootPath, sortPath, fmt.Sprintf("batch_%d.csv", batchCount))
 				g.Go(func(path string, fn func(a, b *common.CSV) bool) func() error {
@@ -150,6 +155,12 @@ func sortAndSave(name string, csvData []*common.CSV, by func(a *common.CSV, b *c
 	return nil
 }
 
+var writeBufPool = sync.Pool{
+	New: func() any {
+		return bufio.NewWriterSize(nil, 4*1024*1024)
+	},
+}
+
 func write(name string, data []*common.CSV) error {
 	if err := os.MkdirAll(filepath.Dir(name), 0755); err != nil && !os.IsExist(err) {
 		return err
@@ -166,11 +177,15 @@ func write(name string, data []*common.CSV) error {
 		}
 	}()
 
+	writer := writeBufPool.Get().(*bufio.Writer)
+	writer.Reset(file)
+	defer writeBufPool.Put(writer)
+
 	for _, csvData := range data {
-		if _, err := file.Write(csvData.Bytes()); err != nil {
+		if _, err := writer.Write(csvData.Bytes()); err != nil {
 			return err
 		}
 	}
 
-	return nil
+	return writer.Flush()
 }

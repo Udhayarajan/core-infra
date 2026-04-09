@@ -146,13 +146,14 @@ func TestNewFromBytes(t *testing.T) {
 				parse: true,
 			},
 			want: &CSV{
-				b: []byte("12345,Ada Lovelace,10 Downing Street,Europe"),
-				parsed: &parsedCSV{
+				raw: []byte("12345,Ada Lovelace,10 Downing Street,Europe"),
+				parsedCSV: &parsedCSV{
 					ID:        12345,
 					Name:      "Ada Lovelace",
 					Address:   "10 Downing Street",
 					Continent: "Europe",
 				},
+				parsed: 0b00001111,
 			},
 		},
 		{
@@ -162,7 +163,7 @@ func TestNewFromBytes(t *testing.T) {
 				parse: false,
 			},
 			want: &CSV{
-				b: []byte("12345,Ada Lovelace,10 Downing Street,Europe"),
+				raw: []byte("12345,Ada Lovelace,10 Downing Street,Europe"),
 			},
 		},
 		{
@@ -172,11 +173,12 @@ func TestNewFromBytes(t *testing.T) {
 				parse: true,
 			},
 			want: &CSV{
-				b: []byte("Ada Lovelace,10 Downing Street,12345"),
-				parsed: &parsedCSV{
+				raw: []byte("Ada Lovelace,10 Downing Street,12345"),
+				parsedCSV: &parsedCSV{
 					ID:   -161940601,
 					Name: "10 Downing Street",
 				},
+				parsed: 0b00001111,
 			},
 		},
 	}
@@ -185,66 +187,6 @@ func TestNewFromBytes(t *testing.T) {
 			if got := NewFromBytes(tt.args.data, tt.args.parse); !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("NewFromBytes() = %v, want %v", got, tt.want)
 			}
-		})
-	}
-}
-
-func TestCSV_ensureParsed(t *testing.T) {
-	type args struct {
-		field int
-	}
-	tests := []struct {
-		name   string
-		fields *CSV
-		args   args
-		want   *parsedCSV
-	}{
-		{
-			name:   "ensure unparsed specific field",
-			fields: NewFromBytes([]byte("12345,Ada Lovelace,10 Downing Street,Europe"), false),
-			args: args{
-				field: 1,
-			},
-			want: &parsedCSV{
-				Name: "Ada Lovelace",
-			},
-		},
-		{
-			name:   "ensure unparsed all field",
-			fields: NewFromBytes([]byte("12345,Ada Lovelace,10 Downing Street,Europe"), false),
-			args: args{
-				field: -1,
-			},
-			want: &parsedCSV{
-				ID:        12345,
-				Name:      "Ada Lovelace",
-				Address:   "10 Downing Street",
-				Continent: "Europe",
-			},
-		},
-		{
-			name: "ensure single parsed field",
-			fields: func() *CSV {
-				csvData := NewFromBytes([]byte("12345,Ada Lovelace,10 Downing Street,Europe"), false)
-				csvData.ensureParsed(1) // Pre-parse the Name field
-				return csvData
-			}(),
-			args: args{
-				field: 0,
-			},
-			want: &parsedCSV{
-				ID:   12345,
-				Name: "Ada Lovelace",
-			},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			c := &CSV{
-				b:      tt.fields.b,
-				parsed: tt.fields.parsed,
-			}
-			c.ensureParsed(tt.args.field)
 		})
 	}
 }

@@ -42,14 +42,15 @@ func (h consumerGroupHandler) ConsumeClaim(sess sarama.ConsumerGroupSession, cla
 	eventCount := int64(0)
 	for {
 		select {
-		case msg := <-claim.Messages():
+		case msg, ok := <-claim.Messages():
+			if !ok {
+				return nil
+			}
 			if msg == nil {
 				continue
 			}
-			if eventCount%10_000 == 0 {
-				timer.Reset(h.inactivityTimeoutDuration)
-			}
 			if msg.Topic == "source" {
+				timer.Reset(h.inactivityTimeoutDuration)
 				h.addMessage(common.NewFromBytes(msg.Value, false))
 				sess.MarkMessage(msg, "")
 				eventCount++
