@@ -85,13 +85,13 @@ func (h *consumerGroupHandler) watchInactivity(ctx context.Context) {
 			h.mu.Lock()
 			if h.lastSeen == nil {
 				h.mu.Unlock()
-				slog.Info("no messages received yet, waiting for activity")
+				slog.Debug("no messages received yet, waiting for activity")
 				continue
 			}
 			idle := time.Since(*h.lastSeen)
 			h.mu.Unlock()
 
-			slog.Info("watching inactivity", slog.Time("last_seen", *h.lastSeen), slog.Duration("idle_time", idle))
+			slog.Debug("watching inactivity", slog.Time("last_seen", *h.lastSeen), slog.Duration("idle_time", idle))
 
 			if idle >= h.timeout {
 				slog.Info("validator inactivity timeout reached, shutting down")
