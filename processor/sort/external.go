@@ -4,8 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"container/heap"
-	"errors"
-	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -51,7 +49,6 @@ func ExternalSort(rootPath string, producer sarama.AsyncProducer) error {
 		eg.Go(func(files []string, topic string, less func(a *common.CSV, b *common.CSV) bool) func() error {
 			return func() error {
 				sort.Strings(files)
-				slog.Info("merging files", slog.String("topic", topic), slog.Int("num_files", len(files)))
 				return mergeFiles(files, topic, producer, less)
 			}
 		}(files, topic, by))
@@ -63,12 +60,12 @@ func ExternalSort(rootPath string, producer sarama.AsyncProducer) error {
 type mergeSource struct {
 	name   string
 	file   *os.File
-	reader *bufio.Reader
+	reader *bufio.Scanner
 }
 
 func mergeFiles(files []string, topic string, producer sarama.AsyncProducer, less func(a *common.CSV, b *common.CSV) bool) error {
 	if len(files) == 0 {
-		slog.Debug("no merge files found", slog.String("topic", topic))
+		slog.Info("no merge files found", slog.String("topic", topic))
 		return nil
 	}
 
@@ -100,7 +97,7 @@ func mergeFiles(files []string, topic string, producer sarama.AsyncProducer, les
 			return
 		}
 
-		slog.Info("external merge progress", slog.String("topic", topic), slog.Int("emitted", emitted), slog.Int("queued", h.Len()))
+		slog.Debug("external merge progress", slog.String("topic", topic), slog.Int("emitted", emitted), slog.Int("queued", h.Len()))
 		lastProgressLog = time.Now()
 	}
 
@@ -137,7 +134,7 @@ func openMergeSources(files []string) ([]mergeSource, error) {
 			}
 			return nil, err
 		}
-		reader := bufio.NewReaderSize(file, 4*1024*1024)
+		reader := bufio.NewScanner(file)
 
 		readers[i] = mergeSource{name: f, file: file, reader: reader}
 	}
@@ -155,14 +152,11 @@ func closeMergeSources(readers []mergeSource) {
 
 func pushNext(h *MinHeap, readers []mergeSource, idx int) error {
 	r := readers[idx]
-	lineBytes, err := r.reader.ReadBytes('\n')
-	if err != nil {
-		if errors.Is(err, io.EOF) {
-			push(h, lineBytes, idx)
-			return nil
-		}
-		return err
+	ok := r.reader.Scan()
+	if !ok {
+		return nil
 	}
+	lineBytes := append([]byte(nil), r.reader.Bytes()...) // copy since scanner buffer will be reused
 	push(h, lineBytes, idx)
 	return nil
 }
