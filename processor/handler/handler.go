@@ -39,7 +39,6 @@ func (consumerGroupHandler) Cleanup(_ sarama.ConsumerGroupSession) error { retur
 func (h consumerGroupHandler) ConsumeClaim(sess sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
 	timer := time.NewTimer(h.inactivityTimeoutDuration)
 	defer timer.Stop()
-	eventCount := int64(0)
 	for {
 		select {
 		case msg, ok := <-claim.Messages():
@@ -53,7 +52,6 @@ func (h consumerGroupHandler) ConsumeClaim(sess sarama.ConsumerGroupSession, cla
 				timer.Reset(h.inactivityTimeoutDuration)
 				h.addMessage(common.NewFromBytes(msg.Value, false))
 				sess.MarkMessage(msg, "")
-				eventCount++
 				continue
 			}
 			slog.Error("no handler found for topic", slog.String("topic", msg.Topic))
