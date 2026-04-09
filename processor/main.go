@@ -32,9 +32,9 @@ func init() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		AddSource: true,
 	})))
-	flag.Int64Var(&batchSize, "batch", 10_000_000, "size of messages to batch before writing to disk")
-	flag.Int64Var(&maxEvents, "max", 2*fiftyMillion, "maximum number of events the listener should process before exiting")
-	flag.DurationVar(&inactivityTimeout, "timeout", 2*time.Minute, "duration of inactivity after which the listener should exit")
+	flag.Int64Var(&batchSize, "batch", 100_000_000, "size of messages to batch before writing to disk")
+	flag.Int64Var(&maxEvents, "max", fiftyMillion, "maximum number of events the listener should process before exiting")
+	flag.DurationVar(&inactivityTimeout, "timeout", 40*time.Second, "duration of inactivity after which the listener should exit")
 	flag.DurationVar(&flushInterval, "flush", 10*time.Second, "duration after which the batcher should flush messages to disk")
 	flag.Parse()
 }
@@ -74,7 +74,7 @@ func main() {
 	}
 	cancel()
 
-	slog.Info("done individual files, doing external sort, this will take some time")
+	slog.Info("doing external sort, this will take some time")
 	if err := sort.ExternalSort(rootPath, producer); err != nil {
 		panic(err)
 	}
@@ -152,6 +152,8 @@ func (s *Subscriber) getConnection(ctx context.Context) {
 
 	conf.Consumer.Offsets.Initial = sarama.OffsetOldest
 	conf.Consumer.Return.Errors = true
+	conf.Consumer.Fetch.Max = 10 * 1024 * 1024
+	conf.Consumer.Fetch.Default = 2 * 1024 * 1024
 	conf.Version = sarama.V3_9_0_0
 
 	for consumer == nil {
@@ -170,10 +172,15 @@ func (s *Subscriber) getConnection(ctx context.Context) {
 func NewAsyncProducer() (sarama.AsyncProducer, error) {
 	conf := sarama.NewConfig()
 	conf.ClientID = "processor"
-	conf.Producer.Flush.Messages = 1000
-	conf.Producer.Flush.Frequency = 500 * time.Millisecond
-	conf.Producer.Compression = sarama.CompressionSnappy
+	conf.Producer.Flush.Messages = 5000
+	conf.Producer.Flush.Frequency = 200 * time.Millisecond
+	conf.Producer.Flush.Bytes = 1 * 1024 * 1024
+	conf.Producer.Compression = sarama.CompressionLZ4
+	conf.Producer.CompressionLevel = 1
 	conf.Producer.RequiredAcks = sarama.NoResponse
+	conf.ChannelBufferSize = 2048
+	conf.Producer.MaxMessageBytes = 10 * 1024 * 1024
+	conf.Net.MaxOpenRequests = 10
 
 	broker := os.Getenv("KAFKA_BROKER")
 	if broker == "" {
