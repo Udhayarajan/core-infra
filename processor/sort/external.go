@@ -2,7 +2,10 @@ package sort
 
 import (
 	"bufio"
+	"bytes"
 	"container/heap"
+	"errors"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -58,9 +61,9 @@ func ExternalSort(rootPath string, producer sarama.AsyncProducer) error {
 }
 
 type mergeSource struct {
-	name    string
-	file    *os.File
-	scanner *bufio.Scanner
+	name   string
+	file   *os.File
+	reader *bufio.Reader
 }
 
 func mergeFiles(files []string, topic string, producer sarama.AsyncProducer, less func(a *common.CSV, b *common.CSV) bool) error {
@@ -69,15 +72,12 @@ func mergeFiles(files []string, topic string, producer sarama.AsyncProducer, les
 		return nil
 	}
 
-	readers := make([]mergeSource, len(files))
-	for i, f := range files {
-		file, err := os.Open(f)
-		if err != nil {
-			return err
-		}
-
-		readers[i] = mergeSource{name: f, file: file, scanner: bufio.NewScanner(file)}
+	readers, err := openMergeSources(files)
+	if err != nil {
+		return err
 	}
+	// ensure files are closed when done
+	defer closeMergeSources(readers)
 
 	slog.Info("starting external merge", slog.String("topic", topic), slog.Int("num_files", len(files)))
 
@@ -86,15 +86,9 @@ func mergeFiles(files []string, topic string, producer sarama.AsyncProducer, les
 	emitted := 0
 	lastProgressLog := time.Now()
 
-	for i, r := range readers {
-		if r.scanner.Scan() {
-			line := append([]byte(nil), r.scanner.Bytes()...)
-			csv := common.NewFromBytes(line, true)
-			heap.Push(h, &Item{value: csv, file: i})
-			continue
-		}
-
-		if err := r.scanner.Err(); err != nil {
+	// seed heap with the first record from each reader
+	for i := range readers {
+		if err := pushNext(h, readers, i); err != nil {
 			return err
 		}
 	}
@@ -106,11 +100,7 @@ func mergeFiles(files []string, topic string, producer sarama.AsyncProducer, les
 			return
 		}
 
-		slog.Info("external merge progress",
-			slog.String("topic", topic),
-			slog.Int("emitted", emitted),
-			slog.Int("queued", h.Len()),
-		)
+		slog.Info("external merge progress", slog.String("topic", topic), slog.Int("emitted", emitted), slog.Int("queued", h.Len()))
 		lastProgressLog = time.Now()
 	}
 
@@ -124,24 +114,63 @@ func mergeFiles(files []string, topic string, producer sarama.AsyncProducer, les
 		emitted++
 		logProgress(false)
 
-		r := readers[item.file]
-		if r.scanner.Scan() {
-			line := append([]byte(nil), r.scanner.Bytes()...)
-			csv := common.NewFromBytes(line, true)
-			heap.Push(h, &Item{value: csv, file: item.file})
-			continue
-		}
-
-		if err := r.scanner.Err(); err != nil {
+		if err := pushNext(h, readers, item.file); err != nil {
 			return err
 		}
-		slog.Debug("merge source exhausted", slog.String("topic", topic), slog.String("file", r.name), slog.Int("emitted", emitted))
 	}
 
 	logProgress(true)
 	slog.Info("finished external merge", slog.String("topic", topic), slog.Int("emitted", emitted))
 
 	return nil
+}
+
+func openMergeSources(files []string) ([]mergeSource, error) {
+	readers := make([]mergeSource, len(files))
+	for i, f := range files {
+		file, err := os.Open(f)
+		if err != nil {
+			for j := 0; j < i; j++ {
+				if readers[j].file != nil {
+					_ = readers[j].file.Close()
+				}
+			}
+			return nil, err
+		}
+		reader := bufio.NewReaderSize(file, 4*1024*1024)
+
+		readers[i] = mergeSource{name: f, file: file, reader: reader}
+	}
+	return readers, nil
+}
+
+// closeMergeSources closes all files in readers.
+func closeMergeSources(readers []mergeSource) {
+	for _, r := range readers {
+		if r.file != nil {
+			_ = r.file.Close()
+		}
+	}
+}
+
+func pushNext(h *MinHeap, readers []mergeSource, idx int) error {
+	r := readers[idx]
+	lineBytes, err := r.reader.ReadBytes('\n')
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			push(h, lineBytes, idx)
+			return nil
+		}
+		return err
+	}
+	push(h, lineBytes, idx)
+	return nil
+}
+
+func push(h *MinHeap, readBytes []byte, idx int) {
+	line := bytes.TrimRight(readBytes, "\r\n")
+	csv := common.NewFromBytes(line, true)
+	heap.Push(h, &Item{value: csv, file: idx})
 }
 
 func topicFromSortedPath(sortedPath string) string {
