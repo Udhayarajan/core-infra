@@ -7,10 +7,11 @@ services:
     mem_limit: 512m
     cpu_count: 1
     healthcheck:
-      test: [ "CMD", "bash", "-c", "cub kafka-ready -b broker:29092 1 20" ]
+      test: [ "CMD", "/opt/kafka/bin/kafka-cluster.sh", "cluster-id", "--bootstrap-server", "localhost:9092" ]
       interval: 10s
       timeout: 5s
-      retries: 10
+      retries: 5
+      start_period: 20s
     ports:
       - "9092:9092"
       - "9101:9101"
@@ -37,6 +38,8 @@ services:
       context: .
       dockerfile: generator/Dockerfile
     container_name: generator
+    mem_limit: 64m
+    cpu_count: 2
     networks:
       - core-infra
     depends_on:
@@ -44,11 +47,13 @@ services:
         condition: service_healthy
     environment:
       "KAFKA_BROKER": "broker:29092"
-    command: [ "-total=50_000_000" ] # it's event count
+    command: [ "-max=50_000_000" ] # it's event count
 
 
   processor:
     image: udhayarajan/core-infra-processor:latest
+    mem_limit: 2048m
+    cpu_count: 2
     build:
       context: .
       dockerfile: processor/Dockerfile
@@ -60,16 +65,18 @@ services:
         condition: service_healthy
     environment:
       "KAFKA_BROKER": "broker:29092"
-    command: [ "-max=50_000_000", "-batch=10_000_000" ] # it's batch size in bytes (is equal to 10MB)
+    command: [ "-max=50_000_000", "-batch=100_000_000" ] # it's batch size in bytes (is equal to 100MB)
 
   validator:
     image: udhayarajan/core-infra-validator:latest
+    cpu_count: 1
+    mem_limit: 64m
     build:
       context: .
       dockerfile: validator/Dockerfile
     container_name: validator
     volumes:
-      - ./csv:/csv
+      - ./:./
     networks:
       - core-infra
     depends_on:
