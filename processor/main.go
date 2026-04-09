@@ -26,17 +26,25 @@ var (
 	flushInterval     time.Duration
 	maxEvents         int64
 	inactivityTimeout time.Duration
+	debug             bool
 )
 
 func init() {
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		AddSource: true,
-	})))
 	flag.Int64Var(&batchSize, "batch", 100_000_000, "size of messages to batch before writing to disk")
 	flag.Int64Var(&maxEvents, "max", fiftyMillion, "maximum number of events the listener should process before exiting")
 	flag.DurationVar(&inactivityTimeout, "timeout", 40*time.Second, "duration of inactivity after which the listener should exit")
 	flag.DurationVar(&flushInterval, "flush", 10*time.Second, "duration after which the batcher should flush messages to disk")
+	flag.BoolVar(&debug, "debug", false, "debug mode")
 	flag.Parse()
+
+	logLevel := slog.LevelInfo
+	if debug {
+		logLevel = slog.LevelDebug
+	}
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		AddSource: true,
+		Level:     logLevel,
+	})))
 }
 
 func getUniqueRunID() string {
@@ -75,9 +83,11 @@ func main() {
 	cancel()
 
 	slog.Info("doing external sort, this will take some time")
+	start := time.Now()
 	if err := sort.ExternalSort(rootPath, producer); err != nil {
 		panic(err)
 	}
+	slog.Info("external sort completed", slog.String("duration", time.Since(start).String()))
 }
 
 // Subscribe consumes messages from the "source" topic and sends them to csvBatcher.
