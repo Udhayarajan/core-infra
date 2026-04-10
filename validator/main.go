@@ -40,6 +40,8 @@ func init() {
 }
 
 func main() {
+	// delete result/sccess.txt if exists
+	_ = os.Remove("./results/SUCCESS.txt")
 	start := time.Now()
 	subscriber := &Subscriber{}
 	if err := subscriber.Subscribe(context.Background()); err != nil {
