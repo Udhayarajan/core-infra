@@ -12,10 +12,13 @@ function Run-Service($svc) {
     # Give logs a moment to flush, then kill
     Start-Sleep -Milliseconds 500
     Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+    Write-Host "=== $($svc.ToUpper()) completed==="
+    Write-Host ""
 }
 
 $startTime = Get-Date
 Write-Host "Starting pipeline..."
+Write-Host ""
 docker compose up -d
 Run-Service "generator"
 Run-Service "processor"
