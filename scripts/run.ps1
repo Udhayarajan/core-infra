@@ -14,7 +14,12 @@ function Run-Service($svc) {
     Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
 }
 
+$startTime = Get-Date
+Write-Host "Starting pipeline..."
 docker compose up -d
 Run-Service "generator"
 Run-Service "processor"
 Run-Service "validator"
+$endTime = Get-Date
+$duration = $endTime - $startTime
+Write-Host "Pipeline completed in $($duration.TotalSeconds) seconds."

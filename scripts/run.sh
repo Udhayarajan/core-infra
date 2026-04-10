@@ -10,7 +10,12 @@ run_service() {
     kill "$LOG_PID" 2>/dev/null || true
 }
 
+startTime=$(date +%s)
+echo "Starting pipeline..."
 docker compose up -d
 run_service generator
 run_service processor
 run_service validator
+endTime=$(date +%s)
+duration=$((endTime - startTime))
+echo "Pipeline completed in $duration seconds."
