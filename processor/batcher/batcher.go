@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"core-infra/common"
@@ -20,16 +21,21 @@ import (
 const avgRecordSize = 50
 
 type Batcher struct {
-	messages      []*common.CSV
-	batches       chan []*common.CSV
+	messages    []*common.CSV
+	batches     chan []*common.CSV
+	batchClosed atomic.Bool
+	wg          sync.WaitGroup
+
 	flushInterval time.Duration
-	limit         int64
-	currentSize   int64
-	check         chan bool
-	rootPath      string
-	mu            sync.Mutex
+	limit         int64 // in bytes
 	maxEventCount int64
-	currentCount  int64
+	rootPath      string
+
+	check chan bool
+	mu    sync.Mutex
+
+	currentSize  int64
+	currentCount int64
 }
 
 func NewBatcher(maxEventCount, batchLimit int64, flushInterval time.Duration, rootPath string) *Batcher {
@@ -74,6 +80,9 @@ func (b *Batcher) Start(ctx context.Context, closeCh chan struct{}) {
 			b.flushBatch(msg)
 			if b.currentCount >= b.maxEventCount {
 				slog.Info("expected amount of events received", slog.Any("current_count", b.currentCount))
+				b.batchClosed.Store(true)
+				close(b.batches)
+				b.wg.Wait()
 				close(closeCh)
 				return
 			}
@@ -94,10 +103,12 @@ func (b *Batcher) AddMessage(msg *common.CSV) {
 }
 
 func (b *Batcher) flushBatch(messages []*common.CSV) {
-	if len(messages) == 0 {
+	if len(messages) == 0 || b.batchClosed.Load() {
 		return
 	}
+	b.wg.Add(1)
 	b.batches <- messages
+
 }
 
 func (b *Batcher) flushBatches(ctx context.Context) {
@@ -109,24 +120,30 @@ func (b *Batcher) flushBatches(ctx context.Context) {
 				return
 			}
 			batchCount++
-			g := errgroup.Group{}
-			for _, msg := range batch {
-				msg.ParseAll()
-			}
+			func() {
+				defer b.wg.Done()
+				g := errgroup.Group{}
+				for _, msg := range batch {
+					msg.ParseAll()
+				}
 
-			for sortPath, fn := range srt.FuncMapper {
-				path := filepath.Join(b.rootPath, sortPath, fmt.Sprintf("batch_%d.csv", batchCount))
-				g.Go(func(path string, fn func(a, b *common.CSV) bool) func() error {
-					return func() error {
-						return sortAndSave(path, batch, fn)
-					}
-				}(path, fn))
-			}
-			if err := g.Wait(); err != nil {
-				slog.Error("flush batch fails", slog.Any("err", err))
-			}
+				for sortPath, fn := range srt.FuncMapper {
+					path := filepath.Join(b.rootPath, sortPath, fmt.Sprintf("batch_%d.csv", batchCount))
+					g.Go(func(path string, fn func(a, b *common.CSV) bool) func() error {
+						return func() error {
+							return sortAndSave(path, batch, fn)
+						}
+					}(path, fn))
+				}
+				if err := g.Wait(); err != nil {
+					slog.Error("flush batch fails", slog.Any("err", err))
+				}
 
-			slog.Info("flushed batch", slog.Int("messages", len(batch)))
+				slog.Info("flushed batch", slog.Int("messages", len(batch)))
+			}()
+		case <-ctx.Done():
+			slog.Info("batch flush loop exiting due to context cancellation", slog.Any("batch", batchCount))
+			return
 		}
 	}
 }
