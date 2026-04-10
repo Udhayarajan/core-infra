@@ -41,7 +41,7 @@ func NewBatcher(maxEventCount, batchLimit int64, flushInterval time.Duration, ro
 		check:         make(chan bool),
 		limit:         batchLimit,
 		rootPath:      rootPath,
-		batches:       make(chan []*common.CSV, 30), // buffer to hold batches before they are flushed
+		batches:       make(chan []*common.CSV, 5), // buffer to hold batches before they are flushed
 		maxEventCount: maxEventCount,
 	}
 }
@@ -64,12 +64,12 @@ func (b *Batcher) Start(ctx context.Context, closeCh chan struct{}) {
 			shouldFlush := b.currentSize >= b.limit
 			b.mu.Unlock()
 			if shouldFlush {
-				slog.Info("batcher flush limit exceeded", slog.Any("limit", b.limit), slog.Any("currentSize", b.currentSize))
+				slog.Debug("batcher flush limit exceeded", slog.Any("limit", b.limit), slog.Any("currentSize", b.currentSize))
 				b.flushBatch(b.getMessages())
 				ticker.Reset(b.flushInterval)
 			}
 		case <-ticker.C:
-			slog.Info("batcher flush interval")
+			slog.Debug("batcher flush interval")
 			msg := b.getMessages()
 			b.flushBatch(msg)
 			if b.currentCount >= b.maxEventCount {
