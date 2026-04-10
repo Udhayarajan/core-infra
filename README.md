@@ -139,7 +139,7 @@ docker run -d --name processor \
   --memory=1536m --cpus=1 \
   --network core-infra \
   -e KAFKA_BROKER=broker:29092 \
-  udhayarajan/core-infra-processor:latest -max=50_000_000 -batch=100_000_000
+  udhayarajan/core-infra-processor:latest -max=50_000_000 -batch=80_000_000
 
 # Validator — writes sorted CSV to host ./csv/ and ./results/
 mkdir -p csv results
@@ -296,14 +296,20 @@ record count.
 - Streams each record directly to the corresponding CSV file — no in-memory accumulation.
 - After all records are written, prints sample records and total counts per file, then writes a summary to
   `./results/SUCCESS.txt`.
-- summary syntax is [head|mid|tail] path=<filepath> line=<id>,<name>,<address>,<continent>
+- summary syntax is `[head|mid|tail] path=<filepath> line=<id>,<name>,<address>,<continent>`
 
 ### Startup order
 
 Docker Compose enforces startup order via `depends_on: condition: service_healthy`. The generator, processor, and
 validator all wait for the broker's healthcheck to pass before starting.
 
-For manual `docker run`, follow: broker → generator → processor → validator.
+(Recommended) For manual `docker run`, follow: broker → generator → processor → validator.
+
+#### NOTE:
+
+- There is no strict ordering between generator, processor and validator since they are decoupled by Kafka.
+- If starting processor before the generator, make sure to quickly start the generator within `-timeout` on processor to
+  avoid processor exiting due to inactivity.
 
 ---
 
@@ -426,6 +432,9 @@ Pipeline completed in 1437.2360982 seconds.
 
 The **generator → broker → processor** path is the primary bottleneck because Kafka is single-partitioned (by design, to
 keep memory within budget) and all 50M messages must pass through it twice (raw → sorted).
+
+The trade-off accepted is memory over speed. Lowering in-memory batch size `-batch` reduces memory but increases the
+number of batch files, which increases the k-way merge time due to more disk seeks and a larger min-heap.
 
 ### Scaling to more data and more machines
 
