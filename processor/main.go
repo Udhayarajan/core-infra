@@ -70,7 +70,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	ch := make(chan struct{}, 1)
+	ch := make(chan struct{})
 	go func() {
 		<-ch
 		cancel()
