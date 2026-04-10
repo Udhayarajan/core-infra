@@ -8,11 +8,7 @@ else
 endif
 
 run:
-	start := $$(date +%s)
-	@echo "Running the pipeline..."
 	$(RUN)
-	@echo "Pipeline execution completed in $$(( $$(date +%s) - start )) seconds."
-
 
 local_run:
 	@cmd /C "$(CURDIR)\scripts\local.bat"
