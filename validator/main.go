@@ -146,7 +146,7 @@ func (s *Subscriber) getConnection(ctx context.Context) {
 	slog.DebugContext(ctx, "consumer connected")
 }
 func printSample() {
-	outFile, err := os.Create("/SUCCESS.txt")
+	outFile, err := os.Create("./results/SUCCESS.txt")
 	if err != nil {
 		panic(err)
 	}
