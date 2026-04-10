@@ -57,6 +57,7 @@ func main() {
 	)
 
 	printSample()
+	slog.Info("Done printing sample, please check ./results/SUCCESS.txt on host machine")
 }
 
 func (s *Subscriber) Subscribe(ctx context.Context) error {
@@ -154,31 +155,55 @@ func printSample() {
 	}
 	defer func() { _ = outFile.Close() }()
 
+	// To preserve ordering in the output file we collect each path's
+	// generated sample into an in-memory buffer concurrently, then write
+	// the buffers to the output file in the original `paths` order.
+	// This avoids interleaved lines caused by concurrent writing while
+	// still allowing per-path work to run in parallel.
 	mu := sync.Mutex{}
 	paths := []string{"./csv/id_sorted.csv", "./csv/name_sorted.csv", "./csv/continent_sorted.csv"}
+	outputs := make([]string, len(paths))
 	eg := errgroup.Group{}
-	for _, path := range paths {
-		p := path
+	for i, path := range paths {
+		i, p := i, path
 		eg.Go(func() error {
-			return printSampleOn(p, outFile, &mu)
+			s, err := renderSample(p)
+			if err != nil {
+				return err
+			}
+			outputs[i] = s
+			return nil
 		})
 	}
 	if err := eg.Wait(); err != nil {
 		panic(err)
 	}
+
+	// Write collected outputs in the original order to avoid interleaving.
+	for i, p := range paths {
+		mu.Lock()
+		_, _ = outFile.WriteString(outputs[i])
+		mu.Unlock()
+		// Emit a single structured log indicating we've written the whole
+		// sample for this path.
+		slog.Info("sample.written", slog.String("path", p), slog.Int("index", i))
+	}
 }
 
-func printSampleOn(path string, out *os.File, mu *sync.Mutex) error {
+func renderSample(path string) (string, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer func() { _ = file.Close() }()
 
+	var buf bytes.Buffer
+	buf.Grow(1024) // Pre-allocate some space to avoid multiple allocations
 	writeLine := func(format string, args ...any) {
-		mu.Lock()
-		defer mu.Unlock()
-		fmt.Fprintf(out, format+"\n", args...)
+		msg := fmt.Sprintf(format, args...)
+		_, _ = fmt.Fprintln(&buf, msg)
+		// Maintain the original structured log for each sample line.
+		slog.Info("sample.summary", slog.String("path", path), slog.String("msg", msg))
 	}
 
 	writeLine("start sampling path=%s", path)
@@ -200,7 +225,7 @@ func printSampleOn(path string, out *os.File, mu *sync.Mutex) error {
 	// --- MIDDLE ---
 	writeLine("=== mid section === path=%s", path)
 	if _, err = file.Seek(0, io.SeekStart); err != nil {
-		return err
+		return "", err
 	}
 	scanner = bufio.NewScanner(file)
 	midStart := (totalLines / 2) - 1
@@ -218,7 +243,7 @@ func printSampleOn(path string, out *os.File, mu *sync.Mutex) error {
 	newlineCount := 0
 	offset, err := file.Seek(0, io.SeekEnd)
 	if err != nil {
-		return err
+		return "", err
 	}
 	fileSize := offset
 
@@ -230,7 +255,7 @@ func printSampleOn(path string, out *os.File, mu *sync.Mutex) error {
 		offset -= step
 		chunk := make([]byte, step)
 		if _, err := file.ReadAt(chunk, offset); err != nil {
-			return err
+			return "", err
 		}
 		for i := len(chunk) - 1; i >= 0; i-- {
 			if chunk[i] == '\n' {
@@ -249,11 +274,11 @@ func printSampleOn(path string, out *os.File, mu *sync.Mutex) error {
 
 	if newlineCount < 4 {
 		if _, err := file.Seek(0, io.SeekStart); err != nil {
-			return err
+			return "", err
 		}
 		all, err := io.ReadAll(file)
 		if err != nil {
-			return err
+			return "", err
 		}
 		tailBuf = all
 		_ = fileSize
@@ -264,5 +289,5 @@ func printSampleOn(path string, out *os.File, mu *sync.Mutex) error {
 		writeLine("[tail] path=%s line=%s", path, tailScanner.Text())
 	}
 
-	return nil
+	return buf.String(), nil
 }
