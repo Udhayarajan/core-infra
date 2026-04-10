@@ -94,7 +94,7 @@ func generateDataWorker(wg *sync.WaitGroup, dataPerWorker int64, producer sarama
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	gen := data.NewGenerator(rng)
 
-	for j := int64(0); j <= dataPerWorker; j++ {
+	for j := int64(0); j < dataPerWorker; j++ {
 		payload := gen.Generate()
 		producer.Input() <- &sarama.ProducerMessage{
 			Topic: "source",
