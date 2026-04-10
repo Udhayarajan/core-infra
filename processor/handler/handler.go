@@ -15,6 +15,7 @@ type consumerGroupHandler struct {
 	batcher                   *batcher.Batcher
 	inactivityTimeoutDuration time.Duration
 	exitCh                    chan struct{}
+	eventCount                int64
 }
 
 func NewConsumerGroupHandler(batcher *batcher.Batcher, inactivityTimeout time.Duration, ch chan struct{}) (sarama.ConsumerGroupHandler, error) {
@@ -33,10 +34,10 @@ func NewConsumerGroupHandler(batcher *batcher.Batcher, inactivityTimeout time.Du
 	}, nil
 }
 
-func (consumerGroupHandler) Setup(_ sarama.ConsumerGroupSession) error   { return nil }
-func (consumerGroupHandler) Cleanup(_ sarama.ConsumerGroupSession) error { return nil }
+func (*consumerGroupHandler) Setup(_ sarama.ConsumerGroupSession) error   { return nil }
+func (*consumerGroupHandler) Cleanup(_ sarama.ConsumerGroupSession) error { return nil }
 
-func (h consumerGroupHandler) ConsumeClaim(sess sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
+func (h *consumerGroupHandler) ConsumeClaim(sess sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
 	timer := time.NewTimer(h.inactivityTimeoutDuration)
 	defer timer.Stop()
 	for {
@@ -50,6 +51,7 @@ func (h consumerGroupHandler) ConsumeClaim(sess sarama.ConsumerGroupSession, cla
 			}
 			if msg.Topic == "source" {
 				timer.Reset(h.inactivityTimeoutDuration)
+				h.eventCount++
 				h.addMessage(common.NewFromBytes(msg.Value, false))
 				sess.MarkMessage(msg, "")
 				continue
@@ -63,6 +65,6 @@ func (h consumerGroupHandler) ConsumeClaim(sess sarama.ConsumerGroupSession, cla
 	}
 }
 
-func (h consumerGroupHandler) addMessage(msg *common.CSV) {
+func (h *consumerGroupHandler) addMessage(msg *common.CSV) {
 	h.batcher.AddMessage(msg)
 }
