@@ -21,8 +21,8 @@ import (
 const avgRecordSize = 50
 
 type Batcher struct {
-	messages    []*common.CSV
-	batches     chan []*common.CSV
+	messages    [][]byte
+	batches     chan [][]byte
 	batchClosed atomic.Bool
 	wg          sync.WaitGroup
 
@@ -42,12 +42,12 @@ func NewBatcher(maxEventCount, batchLimit int64, flushInterval time.Duration, ro
 	estimatedCapacity := batchLimit / avgRecordSize
 
 	return &Batcher{
-		messages:      make([]*common.CSV, 0, estimatedCapacity),
+		messages:      make([][]byte, 0, estimatedCapacity),
 		flushInterval: flushInterval,
 		check:         make(chan bool),
 		limit:         batchLimit,
 		rootPath:      rootPath,
-		batches:       make(chan []*common.CSV, 5), // buffer to hold batches before they are flushed
+		batches:       make(chan [][]byte, 5), // buffer to hold batches before they are flushed
 		maxEventCount: maxEventCount,
 	}
 }
@@ -63,7 +63,7 @@ func (b *Batcher) Start(ctx context.Context, closeCh chan struct{}) {
 	for {
 		select {
 		case <-ctx.Done():
-			b.flushBatch(b.getMessages())
+			b.FlushAll()
 			return
 		case <-b.check:
 			b.mu.Lock()
@@ -80,9 +80,7 @@ func (b *Batcher) Start(ctx context.Context, closeCh chan struct{}) {
 			b.flushBatch(msg)
 			if b.currentCount >= b.maxEventCount {
 				slog.Info("expected amount of events received", slog.Any("current_count", b.currentCount))
-				b.batchClosed.Store(true)
-				close(b.batches)
-				b.wg.Wait()
+				b.FlushAll()
 				close(closeCh)
 				return
 			}
@@ -91,18 +89,18 @@ func (b *Batcher) Start(ctx context.Context, closeCh chan struct{}) {
 	}
 }
 
-func (b *Batcher) AddMessage(msg *common.CSV) {
+func (b *Batcher) AddMessage(msg []byte) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.messages = append(b.messages, msg)
-	b.currentSize += int64(len(msg.Bytes()))
+	b.currentSize += int64(len(msg))
 	select {
 	case b.check <- true:
 	default:
 	}
 }
 
-func (b *Batcher) flushBatch(messages []*common.CSV) {
+func (b *Batcher) flushBatch(messages [][]byte) {
 	if len(messages) == 0 || b.batchClosed.Load() {
 		return
 	}
@@ -116,22 +114,23 @@ func (b *Batcher) flushBatches(ctx context.Context) {
 	for {
 		select {
 		case batch, ok := <-b.batches:
-			if !ok && ctx.Err() != nil {
+			if !ok || ctx.Err() != nil {
 				return
 			}
 			batchCount++
 			func() {
 				defer b.wg.Done()
 				g := errgroup.Group{}
+				messages := make([]*common.CSV, 0, len(batch))
 				for _, msg := range batch {
-					msg.ParseAll()
+					messages = append(messages, common.NewFromBytes(msg, true))
 				}
 
 				for sortPath, fn := range srt.FuncMapper {
 					path := filepath.Join(b.rootPath, sortPath, fmt.Sprintf("batch_%d.csv", batchCount))
 					g.Go(func(path string, fn func(a, b *common.CSV) bool) func() error {
 						return func() error {
-							return sortAndSave(path, batch, fn)
+							return sortAndSave(path, messages, fn)
 						}
 					}(path, fn))
 				}
@@ -139,7 +138,7 @@ func (b *Batcher) flushBatches(ctx context.Context) {
 					slog.Error("flush batch fails", slog.Any("err", err))
 				}
 
-				slog.Info("flushed batch", slog.Int("messages", len(batch)))
+				slog.Info("flushed batch", slog.Int("messages", len(messages)))
 			}()
 		case <-ctx.Done():
 			slog.Info("batch flush loop exiting due to context cancellation", slog.Any("batch", batchCount))
@@ -152,16 +151,24 @@ func (b *Batcher) Limit() (int64, time.Duration) {
 	return b.limit, b.flushInterval
 }
 
-func (b *Batcher) getMessages() []*common.CSV {
+func (b *Batcher) getMessages() [][]byte {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	old := b.messages
 	messageCount := len(b.messages)
-	b.messages = make([]*common.CSV, 0, messageCount)
+	b.messages = make([][]byte, 0, messageCount)
 	slog.Debug("getting messages from batcher", slog.Int("message_count", messageCount), slog.Any("current_size", b.currentSize))
 	b.currentSize = 0
 	b.currentCount += int64(messageCount)
 	return old
+}
+
+func (b *Batcher) FlushAll() {
+	b.flushBatch(b.getMessages())
+	if !b.batchClosed.Swap(true) {
+		close(b.batches)
+	}
+	b.wg.Wait()
 }
 
 func sortAndSave(name string, csvData []*common.CSV, by func(a *common.CSV, b *common.CSV) bool) error {

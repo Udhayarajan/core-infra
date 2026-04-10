@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"time"
 
-	"core-infra/common"
 	"core-infra/processor/batcher"
 
 	"github.com/IBM/sarama"
@@ -52,19 +51,20 @@ func (h *consumerGroupHandler) ConsumeClaim(sess sarama.ConsumerGroupSession, cl
 			if msg.Topic == "source" {
 				timer.Reset(h.inactivityTimeoutDuration)
 				h.eventCount++
-				h.addMessage(common.NewFromBytes(msg.Value, false))
+				h.addMessage(msg.Value)
 				sess.MarkMessage(msg, "")
 				continue
 			}
 			slog.Error("no handler found for topic", slog.String("topic", msg.Topic))
 		case <-timer.C:
-			slog.Info("no message received within ideal time, exiting consumer handler", slog.Any("max_ideal_time", h.inactivityTimeoutDuration))
+			slog.Info("no message received within ideal time, exiting consumer handler", slog.String("inactivityTimeout", h.inactivityTimeoutDuration.String()))
+			h.batcher.FlushAll()
 			close(h.exitCh)
 			return nil
 		}
 	}
 }
 
-func (h *consumerGroupHandler) addMessage(msg *common.CSV) {
+func (h *consumerGroupHandler) addMessage(msg []byte) {
 	h.batcher.AddMessage(msg)
 }
