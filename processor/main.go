@@ -60,6 +60,14 @@ func main() {
 
 	defer producer.Close()
 
+	go func() {
+		for err := range producer.Errors() {
+			// Since ordering must be preserved, retries are avoided and
+			// failures result in termination rather than silent data loss.
+			panic(err.Err)
+		}
+	}()
+
 	runID := getUniqueRunID()
 	rootPath := filepath.Join("csv", runID)
 
@@ -187,7 +195,8 @@ func NewAsyncProducer() (sarama.AsyncProducer, error) {
 	conf.Producer.Flush.Bytes = 1 * 1024 * 1024
 	conf.Producer.Compression = sarama.CompressionLZ4
 	conf.Producer.CompressionLevel = 1
-	conf.Producer.RequiredAcks = sarama.NoResponse
+	conf.Producer.Return.Errors = true
+	conf.Producer.RequiredAcks = sarama.WaitForLocal
 	conf.ChannelBufferSize = 2048
 	conf.Producer.MaxMessageBytes = 10 * 1024 * 1024
 	conf.Net.MaxOpenRequests = 10
