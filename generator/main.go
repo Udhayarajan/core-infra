@@ -33,7 +33,7 @@ const (
 func init() {
 	flag.Int64Var(&totalMessages, "max", 50_000_000, "maximum number of messages or event to be generated")
 	flag.BoolVar(&debug, "debug", false, "enable debug logging")
-	flag.IntVar(&totalWorkers, "workers", min(runtime.NumCPU(), 1), "number of concurrent workers to generate data (default: number of CPU cores)")
+	flag.IntVar(&totalWorkers, "workers", runtime.NumCPU(), "number of concurrent workers to generate data (default: number of CPU cores)")
 	flag.Parse()
 
 	logLevel := slog.LevelInfo
