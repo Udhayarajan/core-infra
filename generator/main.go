@@ -2,7 +2,6 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"log/slog"
 	"math/rand"
 	"os"
@@ -17,11 +16,14 @@ import (
 )
 
 var (
-	totalMessages int64
-	totalProduced atomic.Int64
-	totalErrors   atomic.Int64
-	totalWorkers  int
-	debug         bool
+	totalMessages  int64
+	totalGenerated atomic.Int64
+	totalErrors    atomic.Int64
+	totalSuccess   atomic.Int64
+	totalWorkers   int
+	debug          bool
+	retryCh        = make(chan *sarama.ProducerMessage, 1000)
+	droppedCount   atomic.Int64
 )
 
 const (
@@ -31,7 +33,7 @@ const (
 func init() {
 	flag.Int64Var(&totalMessages, "max", 50_000_000, "maximum number of messages or event to be generated")
 	flag.BoolVar(&debug, "debug", false, "enable debug logging")
-	flag.IntVar(&totalWorkers, "workers", runtime.NumCPU(), "number of concurrent workers to generate data (default: number of CPU cores)")
+	flag.IntVar(&totalWorkers, "workers", min(runtime.NumCPU(), 1), "number of concurrent workers to generate data (default: number of CPU cores)")
 	flag.Parse()
 
 	logLevel := slog.LevelInfo
@@ -73,10 +75,11 @@ func main() {
 	var wg sync.WaitGroup
 	slog.Info("Starting producer", slog.Any("total_messages", totalMessages), slog.Any("num_workers", totalWorkers), slog.Any("base_per_worker", basePerWorker), slog.Any("remainder", remainder))
 
+	go retry(producer)
+	go handleErrors(producer)
 	go func() {
-		for err := range producer.Errors() {
-			fmt.Println("error:", err)
-			totalErrors.Add(1)
+		for range producer.Successes() {
+			totalSuccess.Add(1)
 		}
 	}()
 
@@ -97,16 +100,43 @@ func main() {
 
 	wg.Wait()
 	close(progressDone)
+	close(retryCh)
 
-	produced := totalProduced.Load()
-	success := produced - totalErrors.Load()
+	produced := totalGenerated.Load()
 	slog.Info("pipeline complete",
 		slog.Any("total", produced),
 		slog.Any("errors", totalErrors.Load()),
-		slog.Any("success", success),
+		slog.Any("success", totalSuccess.Load()),
 		slog.String("duration", time.Since(start).String()),
 		slog.Any("throughput_msg_per_sec", float64(produced)/time.Since(start).Seconds()),
+		slog.Any("dropped_due_to_retry_queue_full", droppedCount.Load()),
 	)
+}
+
+func handleErrors(producer sarama.AsyncProducer) {
+	for err := range producer.Errors() {
+		totalErrors.Add(1)
+
+		msg := err.Msg
+		retryCount, _ := msg.Metadata.(int)
+		retryCount++
+		msg.Metadata = retryCount
+
+		if msg.Metadata.(int) <= 3 {
+			select {
+			case retryCh <- msg:
+			default:
+				droppedCount.Add(1)
+				slog.Warn("retry queue full, dropping message")
+			}
+		}
+	}
+}
+
+func retry(producer sarama.AsyncProducer) {
+	for msg := range retryCh {
+		producer.Input() <- msg
+	}
 }
 
 func generateDataWorker(wg *sync.WaitGroup, dataPerWorker int64, producer sarama.AsyncProducer) {
@@ -120,7 +150,7 @@ func generateDataWorker(wg *sync.WaitGroup, dataPerWorker int64, producer sarama
 			Topic: "source",
 			Value: payload,
 		}
-		totalProduced.Add(1)
+		totalGenerated.Add(1)
 	}
 }
 
@@ -131,7 +161,7 @@ func progressLogger(done chan struct{}, start time.Time) {
 	for {
 		select {
 		case <-ticker.C:
-			produced := totalProduced.Load()
+			produced := totalGenerated.Load()
 			pct := 0.0
 			if totalMessages > 0 {
 				pct = (float64(produced) / float64(totalMessages)) * 100
@@ -144,11 +174,13 @@ func progressLogger(done chan struct{}, start time.Time) {
 
 			slog.Debug("progress",
 				slog.Int64("produced", produced),
+				slog.Any("success", totalSuccess.Load()),
 				slog.Int64("total", totalMessages),
 				slog.Float64("percent", pct),
 				slog.Int64("errors", totalErrors.Load()),
 				slog.Any("elapsed", time.Since(start).String()),
 				slog.Float64("throughput_msg_per_sec", rate),
+				slog.Any("dropped_due_to_retry_queue_full", droppedCount.Load()),
 			)
 		case <-done:
 			return
@@ -162,6 +194,7 @@ func newAsyncProducer() (sarama.AsyncProducer, error) {
 	conf.Producer.Flush.Messages = 5000
 	conf.Producer.Flush.Bytes = 1 * 1024 * 1024
 	conf.Producer.Return.Errors = true
+	conf.Producer.Return.Successes = true
 	conf.Producer.Flush.Frequency = 200 * time.Millisecond
 	conf.Producer.Compression = sarama.CompressionLZ4
 	conf.Producer.CompressionLevel = 1
