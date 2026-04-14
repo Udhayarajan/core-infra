@@ -56,8 +56,6 @@ func main() {
 		}
 	}()
 
-	numWorkers := runtime.NumCPU()
-
 	// Distribute totalMessages across workers so the sum equals totalMessages.
 	// Use integer division for the base count and distribute the remainder
 	// one-by-one to the first `remainder` workers. This ensures exact
@@ -67,13 +65,13 @@ func main() {
 	}
 	basePerWorker := int64(0)
 	remainder := int64(0)
-	if numWorkers > 0 {
-		basePerWorker = totalMessages / int64(numWorkers)
-		remainder = totalMessages % int64(numWorkers)
+	if totalWorkers > 0 {
+		basePerWorker = totalMessages / int64(totalWorkers)
+		remainder = totalMessages % int64(totalWorkers)
 	}
 
 	var wg sync.WaitGroup
-	slog.Info("Starting producer", slog.Any("total_messages", totalMessages), slog.Any("num_workers", numWorkers), slog.Any("base_per_worker", basePerWorker), slog.Any("remainder", remainder))
+	slog.Info("Starting producer", slog.Any("total_messages", totalMessages), slog.Any("num_workers", totalWorkers), slog.Any("base_per_worker", basePerWorker), slog.Any("remainder", remainder))
 
 	go func() {
 		for err := range producer.Errors() {
@@ -86,7 +84,7 @@ func main() {
 	progressDone := make(chan struct{})
 	go progressLogger(progressDone, start)
 
-	for i := 0; i < numWorkers; i++ {
+	for i := 0; i < totalWorkers; i++ {
 		// Each worker gets basePerWorker, and the first `remainder` workers
 		// receive one extra message to account for the division remainder.
 		count := basePerWorker

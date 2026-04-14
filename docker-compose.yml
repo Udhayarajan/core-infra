@@ -59,7 +59,7 @@ services:
         condition: service_healthy
     environment:
       "KAFKA_BROKER": "broker:29092"
-    command: [ "-max=50_000_000" ] # it's event count
+    command: [ "-max=50_000_000", "-workers=1" ] # it's event count
 
 
   processor:

@@ -249,7 +249,8 @@ Generator
 
 ### Generator
 
-- Detects available CPU cores and spawns one goroutine per core for parallel event generation.
+ - Detects available CPU cores (default) and spawns worker goroutines for parallel event generation. The number
+   of workers can be configured with the `-workers` flag (default: number of CPU cores).
 - Each goroutine produces a share of the 50M events with random `id`, `name`, `address`, and `continent` values.
 - All events are published to the `source` Kafka topic with batching enabled.
 
