@@ -20,6 +20,7 @@ var (
 	totalMessages int64
 	totalProduced atomic.Int64
 	totalErrors   atomic.Int64
+	totalWorkers  int
 	debug         bool
 )
 
@@ -30,6 +31,7 @@ const (
 func init() {
 	flag.Int64Var(&totalMessages, "max", 50_000_000, "maximum number of messages or event to be generated")
 	flag.BoolVar(&debug, "debug", false, "enable debug logging")
+	flag.IntVar(&totalWorkers, "workers", runtime.NumCPU(), "number of concurrent workers to generate data (default: number of CPU cores)")
 	flag.Parse()
 
 	logLevel := slog.LevelInfo
@@ -55,10 +57,24 @@ func main() {
 	}()
 
 	numWorkers := runtime.NumCPU()
-	dataPerWorker := totalMessages / int64(numWorkers)
+
+	// Distribute totalMessages across workers so the sum equals totalMessages.
+	// Use integer division for the base count and distribute the remainder
+	// one-by-one to the first `remainder` workers. This ensures exact
+	// production even when totalMessages is not divisible by numWorkers.
+	if totalMessages < 0 {
+		totalMessages = 0
+	}
+	basePerWorker := int64(0)
+	remainder := int64(0)
+	if numWorkers > 0 {
+		basePerWorker = totalMessages / int64(numWorkers)
+		remainder = totalMessages % int64(numWorkers)
+	}
 
 	var wg sync.WaitGroup
-	slog.Info("Starting producer", slog.Any("total_messages", totalMessages))
+	slog.Info("Starting producer", slog.Any("total_messages", totalMessages), slog.Any("num_workers", numWorkers), slog.Any("base_per_worker", basePerWorker), slog.Any("remainder", remainder))
+
 	go func() {
 		for err := range producer.Errors() {
 			fmt.Println("error:", err)
@@ -71,8 +87,14 @@ func main() {
 	go progressLogger(progressDone, start)
 
 	for i := 0; i < numWorkers; i++ {
+		// Each worker gets basePerWorker, and the first `remainder` workers
+		// receive one extra message to account for the division remainder.
+		count := basePerWorker
+		if int64(i) < remainder {
+			count++
+		}
 		wg.Add(1)
-		go generateDataWorker(&wg, dataPerWorker, producer)
+		go generateDataWorker(&wg, count, producer)
 	}
 
 	wg.Wait()
