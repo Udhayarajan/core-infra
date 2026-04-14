@@ -164,8 +164,6 @@ func newAsyncProducer() (sarama.AsyncProducer, error) {
 	conf.Producer.Flush.Messages = 5000
 	conf.Producer.Flush.Bytes = 1 * 1024 * 1024
 	conf.Producer.Return.Errors = true
-	conf.Producer.Flush.Messages = 5000
-	conf.Producer.Flush.Bytes = 1 << 20
 	conf.Producer.Flush.Frequency = 200 * time.Millisecond
 	conf.Producer.Compression = sarama.CompressionLZ4
 	conf.Producer.CompressionLevel = 1
