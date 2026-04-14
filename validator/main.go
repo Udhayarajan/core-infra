@@ -132,7 +132,7 @@ func (s *Subscriber) getConnection(ctx context.Context) {
 		conf     = sarama.NewConfig()
 	)
 
-	conf.Consumer.Offsets.Initial = sarama.OffsetNewest
+	conf.Consumer.Offsets.Initial = sarama.OffsetOldest
 	conf.Consumer.Return.Errors = true
 	conf.Version = sarama.V3_9_0_0
 
